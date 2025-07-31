@@ -1,0 +1,1248 @@
+---
+output: html_document
+error: FALSE
+warning: FALSE
+---
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+```{r}
+install.packages('plotrix')
+```
+
+## Часть 1. Предварительный анализ данных car2004
+
+```{r}
+library(kableExtra)
+library(ppcor)
+library(readr)
+library(ggplot2)
+library(hrbrthemes)
+library(tidyverse)
+library(readxl)
+library(GGally)
+library(psych)
+library(plotly)
+library(nortest)
+library(summarytools)
+library(scatterPlotMatrix)
+library(viridis)
+library(patchwork)
+library(gridExtra)
+library(ggpubr)
+library(car)
+library(e1071)
+library(cowplot)
+library(corrplot)
+
+print_df <- function(df)
+{
+  df |>
+    kable(format = "html") |>
+    kable_styling() |>
+    kableExtra::scroll_box(width = "100%", height = "100%")
+}
+
+
+create_ggpairs <- function(data, density_diag = TRUE, fig_width = 15, fig_height = 7) {
+  if (density_diag) {
+    ggpairs(data, diag = list(continuous = "densityDiag", discrete = "barDiag", na = "naDiag", mapping = aes(fill = "red")), fig.width = fig_width, fig.height = fig_height)
+  } else {
+    ggpairs(data, diag = list(continuous = "barDiag", mapping = aes(fill = "red")), fig.width = fig_width, fig.height = fig_height)
+  }
+}
+
+plot_qq_graph <- function(data, column_name) {
+  data <- data
+  expected_quantiles <- qnorm(ppoints(length(data)))
+  qqnorm(data, pch = 19, col = "deeppink")
+  qqline(data, distribution = qnorm, lwd = 2, col = "limegreen")
+  legend("topleft", legend = column_name, col = "deeppink", pch = 19)
+}
+
+```
+
+## 1. Загрузка данных
+
+```{r}
+data <- read_excel("C:/Users/arina/Desktop/R/car2004.xls", na = "*")
+colnames(data) <- gsub("-", "_", colnames(data))
+
+head(data, 5) |>
+ print_df()
+```
+
+Количество пропущенных значений для каждого признака
+
+```{r}
+na_count <- colSums(is.na(data))
+print(na_count)
+```
+
+
+## 2. Описание признаков
+
+
+Частота мод
+```{r}
+modes<-summarize(data, across(Name:Width, function(x) max(table(x))))
+print_df(modes)
+```
+
+Количество уникальных значений по каждому признаку
+```{r}
+unique_counts <- sapply(data, function(x) n_distinct(x, na.rm = TRUE))
+print(unique_counts)
+```
+
+***Комментарий.*** Несмотря на то, что у Horsepower довольно большая частота мод, но уникальных значений примерно 25% от всего объема данных, поэтому я посчитала, что логичнее будет считать этот признак непрерывным.  
+
+1. ***Name*** - Название автомобиля - **качественный признак**
+2. ***Sport*** - Спортивная машина (1=да, 0=нет) - **качественный признак**
+Легкие,  обычно имеют мощные двигатели, способные развивать высокие скорости, чаще всего имеют задний или полный привод.
+3. ***SportUtil*** - Внедорожник (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется высокой посадкой, вместительным салоном, большим клиренсом и возможностью полного привода. 
+4. ***Wagon*** - Универсал (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется увеличенным багажным отсеком, обычно имеет передний или полный привод.
+5. ***Minivan*** - Минивэн  (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется большим количеством места для пассажиров и багажа, наиболее характерен передний привод. Некоторые модели минивэнов предлагают неплохую экономию топлива, учитывая их размер и вместительность.
+6. ***Pickup*** - Пикап  (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется мощными двигателями и возможностью заднего или полного приводов.  
+7. ***All-wheel*** - Полный привод (1=да, 0=нет) - **качественный признак**
+8. ***Rear-wheel*** - Задний привод (1=да, 0=нет) - **качественный признак**
+9. ***Retail*** - Рекомендованная розничная цена в долларах (цена продажи диллером) - **количественный непрерывный**
+10. ***Dealer*** - Закупочная цена для дилера в долларах - **количественный непрерывный**
+11. ***Engine*** - Объем двигателя в литрах - **количественный дискретный**
+12. ***Cylinders*** - Число цилиндров (=-1 для роторного двигателя) - **количественный дискретный**
+13. ***Horsepower*** - Лошадиные силы - **количественный дискретный**
+14. ***CityMPG*** - Ожидаемый пробег в милях на галлон топлива для автомобиля в условиях городского движения. - **количественный дискретный**
+15. ***HW_MPG*** - Ожидаемый пробег в милях на галлон топлива для автомобиля в условиях движения по шоссе или трассе при постоянной скорости - **количественный дискретный**
+
+В городском цикле обычно встречаются частые остановки, старты и пробки, что приводит к более частому использованию тормозов и ускорителей. Это может уменьшить экономию топлива.
+
+В условиях шоссейного движения меньше остановок и меньше стартов, что может способствовать более высокой экономии топлива.
+
+То есть ожидается, что HW_MPG > CityMPG.
+
+16. ***Weight*** - Вес автомобиля в фунтах - **количественный непрерывный**
+17. ***WheelBase*** -  Расстояние между передними и задними колесами в дюймах - **количественный дискретный**
+18. ***Length*** - Длина автомобиля в дюймах - **количественный дискретный**
+19. ***Width*** - Ширина автомобиля в дюймах - **количественный дискретный**
+
+
+
+Добавим еще два столбца, которые будут отвечать другому (то есть ни одному из представленных) типу кузова и переднему приводу (понадобятся для поиска зависимостей в пункте 5).
+
+```{r}
+data$Other <- ifelse(rowSums(data[c("Sport", "SportUtil", "Wagon", "Minivan", "Pickup")]) == 0, 1, 0)
+data$Front_wheel <- ifelse(rowSums(data[c("All_wheel", "Rear_wheel")]) == 0, 1, 0)
+```
+
+Также добавим столбцы, отвечающие типу кузова и типу привода (тоже для поиска зависимостей в пункте 5).
+
+***Комментарий.*** Почему-то здесь считается, что "Sport" -- это тоже тип кузова. Предположим, что это означает типы кузовов, наиболее характерные для спортивных автомобилей, например, Roadster. Тогда к Other мы отнесем Coupe, Sedan и Hatchback. 
+```{r}
+data <- data %>%
+  mutate(
+    Body_type = case_when(
+      Sport == 1 ~ 1,
+      SportUtil == 1 ~ 2,
+      Wagon == 1 ~ 3,
+      Minivan == 1 ~ 4,
+      Pickup == 1 ~ 5,
+      Other == 1 ~ 6,
+      TRUE ~ NA_integer_
+    )
+  )
+
+data <- data %>%
+  mutate(
+    Wheel_type = case_when(
+      All_wheel == 1 ~ 1,
+      Rear_wheel == 1 ~ 2,
+      Front_wheel == 1 ~ 3,
+      TRUE ~ NA_integer_  
+    )
+  )
+
+```
+
+
+## 3. Симметричность
+
+```{r chunk_name_1, fig.width=20, fig.height=13}
+data_select <- data %>% select(-Name, -Sport, -SportUtil,-Wagon, -Minivan, -Pickup, -All_wheel, -Rear_wheel, -Front_wheel, -Other, -Cylinders, -Body_type, -Wheel_type)
+
+create_ggpairs(data_select, density_diag = FALSE) 
+```
+
+Наблюдения Retail,Dealer,Engine,Horsepower,CityMPG,HW_MPG, Weight, WheelBase имеют хвост вправо, прологарифмируем их и построим графики зависимостей признаков. 
+
+## 4. Графики зависимостей признаков
+
+```{r chunk_name_2, fig.width=20, fig.height=13}
+data_log <- data %>% 
+  mutate_at(vars(Retail,Dealer,Engine,Horsepower,CityMPG,HW_MPG, Weight, WheelBase), ~log(.))
+
+data_select <- data_log %>% select(-Name, -Sport, -SportUtil,-Wagon, -Minivan, -Pickup, -All_wheel, -Rear_wheel, -Front_wheel, -Other, -Cylinders, -Body_type, -Wheel_type)
+
+create_ggpairs(data_select, density_diag = FALSE) 
+```
+
+
+## 5. Поиск outliers
+
+Так как наблюдений с неизвестными MPG и Weight не так много (14 и 2), то уберем их пока из рассмотрения, так как они мешают увидеть выбросы на графиках.
+
+```{r}
+data_log <- data_log %>%
+  select(-c(Sport, SportUtil, Wagon, Minivan, Pickup, All_wheel, Rear_wheel, Cylinders), everything())
+
+data_clear <- data_log %>%
+  filter(!is.na(Weight) & !is.na(CityMPG))
+
+categories <- list( NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, c(0,1), c(0,1), c(1, 2, 3, 4, 5, 6), c(1, 2, 3), c(0,1), c(0,1), c(0,1), c(0,1), c(0,1), c(0,1), c(0,1), c(-1, 3, 4, 5, 6, 8, 10, 12))
+data_clear |> 
+  select(-Name) |>
+  scatterPlotMatrix(regressionType = 1,
+                        corrPlotType = "Text",
+                        categorical = categories,
+                        plotProperties = list(noCatColor = "Indigo"),
+                        controlWidgets = TRUE,
+                        height = 1200, width = 1250)
+
+```
+
+## Выбросы по CityMPG
+
+
+```{r}
+out1 <- data_clear %>%
+  filter(CityMPG >= 3.6 | CityMPG <= 2.4 | (Retail >= 11.7 & CityMPG <= 2.9))
+
+print_df(out1)
+```
+**Высокое mpg**
+
+У первых трех автомобилей очень высокие показатели mpg. Это связоно с тем, что они являются гибридными автомобилями (используют комбинацию бензинового двигателя и электрической системы), это повышает эффективность топлива. В датасете больше нет гибридных автомобилей, поэтому, удалим их. 
+
+
+Volkswagen Jetta GLS TDI 4dr известен своей высокой экономичностью в расходе топлива. Это связано с использованием технологии TDI (турбодизельный двигатель с прямым впрыском топлива). Эта технология позволяет эффективнее сжигать топливо, улучшает экономию топлива, поэтому его mpg тоже достаточно высокий. Таких автомобилей также больше нет в датасете, поэтому, можем убрать его из рассмотрения. 
+
+**Низкое mpg**
+
+Низкие показатели связаны с тем, что Hummer H2 является внедорожником, а они не ориентированы на экономию топлива. Также у этого автомобиля очень высокий вес (он являтся самым тяжелым автомобилем в выборке), что также влияет на низкие показатели mpg. 
+
+**Высокая цена и довольно низкое mpg**
+
+Porsche 911 GT2 -- спортивный автомобиль. Видно, что он не только по Retail и MPG является выбросом, но и по Horsepower (477 (не в log шкале) -- это очень много, по сравнению с остальными автомобилями). 
+
+Оставшиеся три автомобиля -- мерседесы. Mercedes-Benz CL600 2dr имеет тип кузова Coupe, а Mercedes-Benz SL55 AMG 2dr, Mercedes-Benz SL600 convertible 2dr -- спортивные автомобили с типами кузова Roadster. Эти автомобили спроектированы для предоставления высокого уровня комфорта и роскоши, и первостепенное внимание в них не уделено экономии топлива. Их цена действительно является очень большой (если посмотреть на Retail vs Dealer, то они будут отдаленнымии точками от всех остальных наблюдений вместе с поршем).
+
+```{r}
+data_clear <- data_clear %>%
+  filter(!(CityMPG >= 3.6 | CityMPG <= 2.4 | (Retail >= 11.7 & CityMPG <= 2.9)))
+```
+
+
+## Выбросы по HW_MPG и Engine
+
+```{r}
+out2 <- data_clear %>%
+  filter(Engine <= 0.3 | HW_MPG <= 2.7 | (Engine >= 1.7 & Weight <= 8.1))
+
+print_df(out2)
+```
+
+Mazda RX-8 4dr automatic и Mazda RX-8 4dr manual с очень маленьким объемом двигателя, но при этом хорошими показателями mpg -- автомобили с роторным двигателем, который отличается от типичных поршневых двигателей и обладает рядом особенностей, которые могут влиять на экономию топлива и производительность. Так как автомобилей с таким типом двигателей только 2 в выборке, уберем их из рассмотрения. 
+
+Mercedes-Benz G500 с очень низким показателем mpg -- внедорожник. Он также является довольно тяжжелым, поэтому расход топлива уведичивается, а значит mpg будет маленьким. 
+
+Автомобили с очень большим объемом двигателя, но средним весом и mpg. Chevrolet Corvette 2dr и Chevrolet Corvette convertible 2dr -- спортивные автомобили и такой объем двигателя позволяет достигать более высоких скоростей (В log шкале скорость примерно 5.86, что является довольно высоким значением скорости).
+
+
+```{r}
+ data_clear <- data_clear %>%
+  filter(!(Engine <= 0.3 | HW_MPG <= 2.7 | (Engine >= 1.7 & Weight <= 8.1)))
+
+```
+
+
+Снова построим график зависимостей.
+```{r}
+data_clear |> 
+  select(-Name) |>
+  scatterPlotMatrix(regressionType = 1,
+                        corrPlotType = "Text",
+                        categorical = categories,
+                        plotProperties = list(noCatColor = "Indigo"),
+                        controlWidgets = TRUE,
+                        height = 1200, width = 1250)
+```
+
+
+
+
+Временно удалим все строки с NA, чтобы посмотреть есть ли выбросы у WheelBase, Length, Width. 
+
+
+Снова построим график зависимостей.
+```{r}
+data_clear_na <- na.omit(data_clear)
+
+data_clear_na |> 
+  select(-Name) |>
+  scatterPlotMatrix(regressionType = 1,
+                        corrPlotType = "Text",
+                        categorical = categories,
+                        plotProperties = list(noCatColor = "Indigo"),
+                        controlWidgets = TRUE,
+                        height = 1200, width = 1250)
+```
+
+
+Есть некоторые выделяющиеся наблюдения, но по остальным признакам они таковыми не являются, поэому выбросами считать их не будем.
+
+
+## 6. Неоднородности 
+
+**Неоднородности из-за внедорожников**
+
+Есть небольшая неодродость у  Horsepower vs MPG, Horsepower vs Weight, MPG vs  Retail (Dealer), Weight vs  Retail (Dealer).
+
+1) Horsepower vs MPG, Horsepower vs Weight
+   
+   Объясняется наличием внедорожников, которые, как правило, оснащены мощными двигателями, что позволяет им разгоняться до высоких скоростей.Но mpg маленький в силу их большого веса. 
+
+
+2) MPG vs  Retail (Dealer), Weight vs  Retail (Dealer)
+  
+  Объясняется тем, что у внедорожников меньше mpg в силу их большого размера и веса, но при этом на них высокий спрос из-за их универсальности и вместительности. 
+
+**Неоднородности из-за спортивных автомобилей**
+
+Также если рассмотреть скаттерплоты по Weight, выбрав в качестве категоризующей переменной Sport, можно заметить, что вес спртивных машин меньше по сравнению с остальными, при этом при одном и том же c остальными машинами Weight Retail (Dealer), Horsepower, Engine будут у спортивных машин больше, а mpg будет меньше. 
+
+Если рассмотреть скаттерплоты с удаленными NA, то можно заметить, что по WheelBase vs Retail (Dealer), Horsepower, Engine, mpg спортивные автомобили тоже образуют неоднородность: при одинаковом с остальными машинами WheelBase у спортивных  Retail (Dealer), Horsepower, Engine будут больше, при этом mpg будет меньше. 
+
+## Часть 2. О виде распределений и о сравнении распределений
+
+## 1. Визуальная разница между типами машин в зависимости от цены продажи 
+
+Машины можно классифицировать по типу кузова (Sport, SportUtil, Wagon, Minivan, Pickup, Other), по типу привода (All_wheel, Rear_wheel, Front_wheel), по количеству цилиндров (-1, 3, 4, 5, 6, 8, 10, 12).
+
+Посчитаем, сколько всего автомобилей подходят под каждую категорию:
+
+```{r}
+body_type <- colSums(data_clear[c("Sport", "SportUtil", "Wagon", "Minivan", "Pickup", "Other")] == 1, na.rm = TRUE)
+body_type <- data.frame(Body_Type = names(body_type), Freq = as.vector(body_type))
+row.names(body_type) <- NULL
+print_df(body_type)
+
+
+wheel_type <- colSums(data_clear[c("All_wheel", "Rear_wheel", "Front_wheel")] == 1, na.rm = TRUE)
+wheel_type <- data.frame(Wheel_Type = names(wheel_type), Freq = as.vector(wheel_type))
+row.names(wheel_type) <- NULL
+print_df(wheel_type)
+
+cylinders_type<-table(Cylinders = data_clear$Cylinders)
+print_df(cylinders_type)
+
+```
+
+```{r}
+
+plot1 <- data_clear %>%
+  filter(SportUtil == 1 | Wagon == 1 | Minivan == 1 | Pickup == 1 | Sport == 1 | Other == 1) %>%
+  mutate(Category = ifelse(SportUtil == 1, "SportUtil",
+                           ifelse(Wagon == 1, "Wagon",
+                                  ifelse(Minivan == 1, "Minivan",
+                                         ifelse(Pickup == 1, "Pickup",
+                                                 ifelse(Sport == 1, "Sport",
+                                                         ifelse(Other == 1, "Other", NA))))))) %>%
+  ggplot(aes(x = Category, y = Retail, fill = Category)) +
+  geom_boxplot(alpha = 0.6) +
+  theme_minimal() +
+  labs(title = "Boxplot для цены в зависимости от типа кузова", x = "Category", y = "Retail") +
+  scale_fill_viridis_d(name = "Body type")
+
+
+plot1
+
+```
+
+Из графиков видно, что медианная стоимость спортивных машин и внедорожников выше, чем у машин с другим типом кузова.
+
+Самые дешевые машины -- пикапы. Более дорогие универсалы, other и минивэны.  При этом у категории other самый большой разброс значений, что неудивительно, так как точно неизвестно, машины с каким типом кузова в нее входят, в ней могут встретиться как Sedan или Hatchback (считаются самыми дешевыми машинами), так и Coupe (более дорогие машины).
+
+## Стоимость в зависимости от типа привода для групп Sport, SportUtil и группы из оставшихся типов кузова
+
+Так как спортивные машины и внедорожники создают неоднородность в данных, то будем рассматривать эти группы отдельно от остальных машин.
+
+```{r}
+
+data_clear <- data_clear %>%
+  mutate(Wheel_type = factor(Wheel_type, labels = c("All-wheel", "Rear-wheel", "Front-wheel")))
+
+sport_data <- data_clear %>%
+  filter(Sport == 1)
+
+sport_util_data <- data_clear %>%
+  filter(SportUtil == 1)
+
+other_cars_data <- data_clear %>%
+  filter(Sport == 0 & SportUtil == 0)
+
+ggplot() +
+  geom_boxplot(data = sport_data, aes(x = factor(1), y = Retail, fill = Wheel_type), alpha = 0.6) +
+  geom_boxplot(data = sport_util_data, aes(x = factor(2), y = Retail, fill = Wheel_type), alpha = 0.6) +
+  geom_boxplot(data = other_cars_data, aes(x = factor(3), y = Retail, fill = Wheel_type), alpha = 0.6) +
+  scale_x_discrete(labels = c("Sport", "SportUtil", "Other")) +
+  scale_fill_viridis(discrete = TRUE, alpha = 0.6, option = "magma", name = "Wheel type") +
+  theme_minimal() +
+  labs(title = "Boxplot для цены в зависимости от типа привода и категории автомобиля", x = "Category", y = "Retail")
+
+```
+
+Среди всех групп самыми дешевыми являются переднеприводные автомобили. При этом в категории other переднеприводные машины стоят намного дешевле, чем полноприводные и заднеприводные. Также стоимость переднеприводных машин среди спортивных и внедорожников на первый взгляд примерно одинакова.  
+
+**Почему заднеприводные автомобили дороже полноприводных**
+
+Раскрасим  scatterPlotMatrix по типу привода. Для этого нужно в Use Z Axis выбрать Wheel_type.
+
+Если мы посмотри на скаттерплот Retail vs mpg, то при одинаковой цене у заднеприводных автомобилей mpg будет больше, чем у полноприводных.
+
+Также, если посмотрим на скаттерплот Horsepower vs mpg, то при одинаковом количестве лощадиных сил mpg у заднеприводных будет больше, чем у полноприводных.
+
+То есть более высокую цену на заднеприводные автомобили можно объяснить тем, что у них выше mpg, а значит автомобиль будет проезжать большее расстояние на одном галлоне топлива, что является признаком более эффективного использования топлива.
+
+Построим boxplot по mpg в зависимости от типа привода.
+```{r}
+
+ggplot() +
+  geom_boxplot(data = sport_data, aes(x = factor(1), y = HW_MPG, fill = Wheel_type), alpha = 0.6) +
+  geom_boxplot(data = sport_util_data, aes(x = factor(2), y = HW_MPG, fill = Wheel_type), alpha = 0.6) +
+  geom_boxplot(data = other_cars_data, aes(x = factor(3), y = HW_MPG, fill = Wheel_type), alpha = 0.6) +
+  scale_x_discrete(labels = c("Sport", "SportUtil", "Other")) +
+  scale_fill_viridis(discrete = TRUE, alpha = 0.6, option = "magma", name = "Wheel type") +
+  theme_minimal() +
+  labs(title = "Boxplot для HW_MPG в зависимости от типа привода и категории автомобиля", x = "Category", y = "HW_MPG")
+
+```
+
+
+Картинка получилась интересной, потому что в категории Sport заднеприводные автомобили имеют меньшее медианное значение mpg, чем полноприводные автомобили. В категории other по медиане полноприводные получились равны заднеприводным, но разброс значений у полноприводных больше. 
+
+Посмотри также на скаттерплот Retail vs Weight. При равной цене вес заднеприводных будет меньше, чем полноприводных. Низкий вес влияет на эффективность топлива (расход будет меньше). У автомобилей с низким весом лучше управляемость, эффективная система торможения и более короткий тормозной путь.
+
+Построим boxplot по Weight в зависимости от типа привода.
+```{r}
+
+ggplot() +
+  geom_boxplot(data = sport_data, aes(x = factor(1), y = Weight, fill = Wheel_type), alpha = 0.6) +
+  geom_boxplot(data = sport_util_data, aes(x = factor(2), y = Weight, fill = Wheel_type), alpha = 0.6) +
+  geom_boxplot(data = other_cars_data, aes(x = factor(3), y = Weight, fill = Wheel_type), alpha = 0.6) +
+  scale_x_discrete(labels = c("Sport", "SportUtil", "Other")) +
+  scale_fill_viridis(discrete = TRUE, alpha = 0.6, option = "magma", name = "Wheel type") +
+  theme_minimal() +
+  labs(title = "Boxplot для Weight в зависимости от типа привода и категории автомобиля", x = "Category", y = "Weight")
+
+```
+
+Боксплоты подтверждают это предположение. У заднеприводных медианное значение веса на немного, но меньше медианного значения полноприводных. 
+
+Проверим по критериям. 
+
+Количество спортивных полноприводных и заднеприводных. 
+```{r}
+count_rear_wheel_s <- sum(sport_data$Rear_wheel == 1)
+count_rear_wheel_s  
+
+count_all_wheel_s <- sum(sport_data$All_wheel == 1)
+count_all_wheel_s  
+```
+Количество полноприводных и заднеприводных в группе other. 
+```{r}
+
+count_count_rear_wheel_o <- sum(other_cars_data$Rear_wheel == 1)
+count_count_rear_wheel_o
+
+count_all_wheel_o <- sum(other_cars_data$All_wheel == 1)
+count_all_wheel_o
+```
+
+
+Спортивных автомобилей очень мало, поэтому проверим равенство медиан с помощью непараметрического теста. 
+
+```{r}
+rear_wheel_subset <- subset(other_cars_data, Rear_wheel == 1)
+all_wheel_subset <- subset(other_cars_data, All_wheel == 1)
+
+rear_wheel_weights <- rear_wheel_subset$Weight
+all_wheel_weights <- all_wheel_subset$Weight
+
+ks.test(rear_wheel_weights, all_wheel_weights)
+```
+Нет оснований отвергнуть гипотезу о том, что в групппе other одинаковое распределение веса для заднего и полного привода соответственно.
+
+```{r}
+wilcox.test(rear_wheel_weights, all_wheel_weights)
+t.test(rear_wheel_weights, all_wheel_weights)
+
+```
+
+Оба теста показывают, что нет основания отвергать гипотезу о равенстве веса в группах. 
+
+```{r}
+rear_wheel_subset <- subset(sport_data, Rear_wheel == 1)
+all_wheel_subset <- subset(sport_data, All_wheel == 1)
+
+rear_wheel_weights <- rear_wheel_subset$Weight
+all_wheel_weights <- all_wheel_subset$Weight
+
+ks.test(rear_wheel_weights, all_wheel_weights)
+```
+Нет оснований отвергнуть гипотезу о том, что в групппе sport одинаковое распределение веса для заднего и полного привода соответственно.
+
+```{r}
+wilcox.test(rear_wheel_weights, all_wheel_weights)
+t.test(rear_wheel_weights, all_wheel_weights)
+
+```
+
+Оба теста показывают, что нет основания отвергать гипотезу о равенстве веса в группах. 
+
+**Вывод**
+
+На основе имеющихся данных нельзя сделать вывод, почему заднеприводные автомобили дороже полноприводных. В группе sport данных слишком мало, чтобы подтвердить небольшое отличие в весе, а в группе other могут быть неоднородности, так как точно неизвестно, какие-типы автомобилей в нее входят, поэтому более высокая заднеприводных в этой группе может объясняться особенностями определенных 
+
+
+## Равенство цен на переднеприводные автомобили в группах Sport и SportUtil
+
+Проверим гипотезу о том, что цена на спортивные автомобили с передним приводом равна цене внедорожников с передним приводом. 
+
+Посчитаем количество наблюдений в рассматриваемых группах.
+
+```{r}
+count_sport_data <- nrow(sport_data)
+count_sport_data
+
+count_sport_util_data <- nrow(sport_util_data)
+count_sport_util_data
+```
+При этом переднеприводных машин 
+```{r}
+count_front_wheel_s <- sum(sport_data$Front_wheel == 1)
+count_front_wheel_s  
+
+count_front_wheel_su <- sum(sport_util_data$Front_wheel == 1)
+count_front_wheel_su  
+```
+
+
+Для начала проверим нормальность для каждой группы.
+
+**Передний привод для спортивных автомобилей**
+
+```{r chunk_name_3, fig.width=15, fig.height=6}
+s_front_w_data <- subset(sport_data, Front_wheel == 1)
+
+par(mfrow = c(1,2), mar = c(3, 4, 4, 3))  
+
+plot_qq_graph(s_front_w_data$Retail, "Retail")
+plot_qq_graph(s_front_w_data$Dealer, "Dealer")
+
+
+test_lillie <- lillie.test(s_front_w_data$Retail)
+test_ad <- ad.test(s_front_w_data$Retail)
+test_shapiro <- shapiro.test(s_front_w_data$Retail)
+
+test_n_retail <- data.frame(
+  Критерий = c("lillie.test", "ad.test", "shapiro.test"),
+  Статистика = c(test_lillie$statistic, test_ad$statistic, test_shapiro$statistic),
+  p_value = c(test_lillie$p.value, test_ad$p.value, test_shapiro$p.value)
+)
+
+print_df(test_n_retail)
+
+
+test_lillie <- lillie.test(s_front_w_data$Dealer)
+test_ad <- ad.test(s_front_w_data$Dealer)
+test_shapiro <- shapiro.test(s_front_w_data$Dealer)
+
+test_n_dealer <- data.frame(
+  Критерий = c("lillie.test", "ad.test", "shapiro.test"),
+  Статистика = c(test_lillie$statistic, test_ad$statistic, test_shapiro$statistic),
+  p_value = c(test_lillie$p.value, test_ad$p.value, test_shapiro$p.value)
+)
+
+print_df(test_n_dealer)
+```
+
+**Передний привод для внедорожников**
+
+```{r chunk_name_4, fig.width=15, fig.height=6}
+
+su_front_w_data <- subset(sport_util_data, Front_wheel == 1)
+
+par(mfrow = c(1,2), mar = c(3, 4, 4, 3))  
+
+plot_qq_graph(su_front_w_data$Retail, "Retail")
+plot_qq_graph(su_front_w_data$Dealer, "Dealer")
+
+test_lillie <- lillie.test(su_front_w_data$Retail)
+test_ad <- ad.test(su_front_w_data$Retail)
+test_shapiro <- shapiro.test(su_front_w_data$Retail)
+
+test_n_retail <- data.frame(
+  Критерий = c("lillie.test", "ad.test", "shapiro.test"),
+  Статистика = c(test_lillie$statistic, test_ad$statistic, test_shapiro$statistic),
+  p_value = c(test_lillie$p.value, test_ad$p.value, test_shapiro$p.value)
+)
+
+print_df(test_n_retail)
+
+
+
+test_lillie <- lillie.test(su_front_w_data$Dealer)
+test_ad <- ad.test(su_front_w_data$Dealer)
+test_shapiro <- shapiro.test(su_front_w_data$Dealer)
+
+test_n_dealer <- data.frame(
+  Критерий = c("lillie.test", "ad.test", "shapiro.test"),
+  Статистика = c(test_lillie$statistic, test_ad$statistic, test_shapiro$statistic),
+  p_value = c(test_lillie$p.value, test_ad$p.value, test_shapiro$p.value)
+)
+
+print_df(test_n_dealer)
+
+```
+
+То есть при уровне значимсти 0,05 не можем отвергнуть гипотезу о нормальности распределения цены у переднеприводных внедорожников и спортивных машин. 
+
+Проверим равенство дисперсий.
+
+```{r}
+var.test(su_front_w_data$Retail, s_front_w_data$Retail, ratio = 1)
+
+```
+
+
+При уровне значимости 0,05 не можем отвергнуть гипотезу о равенстве дисперcии у Retail. 
+
+```{r}
+var.test(su_front_w_data$Dealer,  s_front_w_data$Dealer, ratio = 1)
+
+```
+
+
+При уровне значимости 0,05 не можем отвергнуть гипотезу о равенстве дисперcии у Dealer. 
+
+
+Посмотрим на описательные статистики для цены у спортивных автомобилей и внедорожников.
+
+**Sport Retail**
+
+```{r}
+
+variance <- var(s_front_w_data$Retail)
+cat("Дисперсия:", variance, "\n")
+
+skew <- skewness(s_front_w_data$Retail)
+cat("Асимметрия (Skewness):", skew, "\n")
+
+kurt <- kurtosis(s_front_w_data$Retail)
+cat("Эксцесс (Kurtosis):", kurt, "\n")
+
+mean_value <- mean(s_front_w_data$Retail)
+cat("Среднее:", mean_value, "\n")
+
+median_value <- median(s_front_w_data$Retail)
+cat("Медиана:", median_value, "\n")
+
+```
+
+
+```{r}
+
+ggplot(s_front_w_data, aes(x = Retail)) + 
+  geom_histogram(binwidth = 0.25, fill = "skyblue", color = "black") +
+  labs(title = "Гистограмма Retail для переднеприводных Sport", x = "Значение Retail", y = "Частота")
+
+```
+
+Эксцес близок к эксцессу нормального распределения, но ассиметрия, близкая к 1, говорит о том, что распределение данных смещено вправо относительно нормального распределения. 
+
+**SportUtil Retail**
+
+```{r}
+variance <- var(su_front_w_data$Retail)
+cat("Дисперсия:", variance, "\n")
+
+skew <- skewness(su_front_w_data$Retail)
+cat("Асимметрия (Skewness):", skew, "\n")
+
+kurt <- kurtosis(su_front_w_data$Retail)
+cat("Эксцесс (Kurtosis):", kurt, "\n")
+
+mean_value <- mean(su_front_w_data$Retail)
+cat("Среднее:", mean_value, "\n")
+
+median_value <- median(su_front_w_data$Retail)
+cat("Медиана:", median_value, "\n")
+
+```
+
+
+
+```{r}
+
+ggplot(su_front_w_data, aes(x = Retail)) + 
+  geom_histogram(binwidth = 0.25, fill = "skyblue", color = "black") +
+  labs(title = "Гистограмма Retail для переднеприводных SportUtil", x = "Значение Retail", y = "Частота")
+
+```
+
+
+
+В данном случае ассиметрия не так значительна, а значение эксцесса, примерно равное -1, говорит о менее выраженнных по сравнению с нормальным распределением хвостах. 
+
+Дисперсии также имеют небольшое отличие. 
+
+
+Но несмотря на это, тесты не отвергают нормальность и равенство дисперсий.
+
+Проведем t-test без учета равенства дисперсий. 
+
+```{r}
+t.test(su_front_w_data$Retail, s_front_w_data$Retail, alternative = "two.sided")
+t.test(su_front_w_data$Dealer, s_front_w_data$Dealer, alternative = "two.sided")
+
+```
+
+
+Таким образом, при уровне значимости 0,05 не можем отвергнуть гипотезу о том, что средние равны, так как p-value > 0,05. 
+
+## Тест Манна-Уитни и Колмогорова-Смирнова 
+
+Проверим гипотезу о равенстве медиан цены для переднеприводных спортивных машин и переднеприводных внедорожников. 
+
+Гипотезу о равенстве медиан можно проверить с помощью теста Манна-Уитни, но изначально этот тест проверяет гипотезу, что выборки взяты из одного распределения, то есть в случае, когда, например, у распределений будут хвосты в разные стороны, но медианы равны, он гипотезу отвергнет, так как распределения разные. Но в случае, если распределения будут иметь одну форму, с помощью Манна-Уитни можно проверить гипотезу о равенстве медиан. Для распределения цены переднеприводных спортивных машин и переднеприводных внедорожников гипотеза о нормальности не отвергается и асимметрия имеет один знак, значит, нет основания полагать, что у этих распределений хвосты будут в разные стороны, следовательно, можем применять Манна-Уитни для проверки гипотезы о равенстве медиан. 
+
+Проверим гипотезу о равенстве медиан у Retail с помощью Манна-Уитни.
+```{r}
+wilcox.test(su_front_w_data$Retail, s_front_w_data$Retail)
+
+```
+p-value очень большое, поэтому отвергнуть гипотезу о равенстве медиан не можем. 
+
+
+## Сравнение по количеству цилиндров
+
+```{r}
+
+cyl_data <- data_clear %>%
+  filter(Cylinders %in% c(4, 6, 8)) %>%
+  mutate(Cylinder_type = factor(Cylinders, labels = c("4 Cylinders", "6 Cylinders", "8 Cylinders")))
+
+cyl_sport_data <- cyl_data %>%
+  filter(Sport == 1)
+
+cyl_sport_util_data <- cyl_data %>%
+  filter(SportUtil == 1)
+
+cyl_other_cars_data <- cyl_data %>%
+  filter(Sport == 0 & SportUtil == 0)
+
+ggplot() +
+  geom_boxplot(data = cyl_sport_data, aes(x = factor(1), y = Retail, fill = Cylinder_type), alpha = 0.6) +
+  geom_boxplot(data = cyl_sport_util_data, aes(x = factor(2), y = Retail, fill = Cylinder_type), alpha = 0.6) +
+  geom_boxplot(data = cyl_other_cars_data, aes(x = factor(3), y = Retail, fill = Cylinder_type), alpha = 0.6) +
+  scale_x_discrete(labels = c("Sport", "SportUtil", "Other")) +
+  scale_fill_viridis(discrete = TRUE, alpha = 0.6, option="C", name = "Cylinders") +
+  theme_minimal() +
+  labs(title = "Boxplot для цены в зависимости от числа цилиндров и категории автомобиля", x = "Category", y = "Retail")
+```
+
+Ничего удивительного мы не получили, для всех данных был получен тот же самый результат. 
+
+```{r}
+
+ plot3 <- data_clear %>%
+  filter(Cylinders %in% c(4, 6, 8)) %>%
+  ggplot(aes(x = as.factor(Cylinders), y = Retail, fill = as.factor(Cylinders))) +
+  geom_boxplot(alpha = 0.6) +
+  scale_fill_viridis(discrete = TRUE, alpha=0.6, option="C", name = "Cylinders") +
+  theme_minimal() +
+  labs(title = "Boxplot для цены в зависимости от числа цилиндров", x = "Cylinders", y = "Retail")
+ 
+ plot3
+```
+
+
+## 2. Сравнение цен Dealer и Retail по критериям и с помощью boxplot
+
+Будем проводить сравнение для машин без учета внедорожников и спортивных автомобилей.
+
+**Визуальное сравнение**
+
+```{r}
+other_cars_data_long <- tidyr::gather(other_cars_data, key = "Price_Type", value = "Price", Dealer, Retail)
+
+ggplot(other_cars_data_long, aes(x = Price_Type, y = Price, fill = Price_Type)) +
+  geom_boxplot(alpha = 0.5) +
+  labs(x = "Price Type", y = "Price") +
+  theme_minimal()
+```
+
+
+Видно, что медиана у Retail больше, чем у Dealer (чего и стоило ожидать).
+
+**Сравнение по критериям**
+
+Проверим гипотезу о равенстве средних у Dealer и Retail. Ожидается, что она должна быть отвергнута, так как цена Retail>Dealer.
+
+Проверим данные на нормальность.Визуально:
+
+```{r chunk_name_5, fig.width=15, fig.height=6}
+par(mfrow = c(1,2), mar = c(3, 4, 4, 3))  
+
+plot_qq_graph(other_cars_data$Retail, "Retail")
+plot_qq_graph(other_cars_data$Dealer, "Dealer")
+
+```
+На хвостах есть отклонения от нормальности, но в целом признаки похожи на нормально распределенные. 
+
+
+С помощью критериев. Уровень значимости равен 0,05.
+
+```{r}
+
+test_lillie <- lillie.test(other_cars_data$Retail)
+test_ad <- ad.test(other_cars_data$Retail)
+test_shapiro <- shapiro.test(other_cars_data$Retail)
+
+test_n_retail <- data.frame(
+  Критерий = c("lillie.test", "ad.test", "shapiro.test"),
+  Статистика = c(test_lillie$statistic, test_ad$statistic, test_shapiro$statistic),
+  p_value = c(test_lillie$p.value, test_ad$p.value, test_shapiro$p.value)
+)
+
+print_df(test_n_retail)
+```
+
+```{r}
+
+test_lillie <- lillie.test(other_cars_data$Dealer)
+test_ad <- ad.test(other_cars_data$Dealer)
+test_shapiro <- shapiro.test(other_cars_data$Dealer)
+
+test_n_dealer <- data.frame(
+  Критерий = c("lillie.test", "ad.test", "shapiro.test"),
+  Статистика = c(test_lillie$statistic, test_ad$statistic, test_shapiro$statistic),
+  p_value = c(test_lillie$p.value, test_ad$p.value, test_shapiro$p.value)
+)
+
+print_df(test_n_dealer)
+
+```
+
+
+И для Dealer, и для Retail нормальность по всем тестам не отвергается. 
+
+
+```{r}
+t.test(other_cars_data$Dealer, other_cars_data$Retail, paired = TRUE,  alternative = "less")
+```
+
+p-value очень маленькое, значит, гипотеза о равенстве средних отвергается, как и предполагалось. 
+
+**Процент, который берет себе ретейлер**
+
+Будем добавлять его к изначальным данным, очищенным от выбросов. 
+
+Добавим новый столбец, в котором будут значения процента, который берет себе ретейлер.
+
+```{r}
+data_clear$Retailer_Percentage <- ((data_clear$Retail - data_clear$Dealer) / data_clear$Retail) * 100
+
+ggplot(data_clear, aes(x = Retailer_Percentage)) +
+  geom_histogram(binwidth = 0.1, fill = "skyblue", color = "black") +
+  labs(title = "Распределение процентов", x = "Процент, который берет ретейлер", y = "Частота") +
+  theme(panel.background = element_rect(fill = "white"), panel.grid.major = element_line(color = "gray", linetype = "dashed")) +
+  theme_minimal()
+
+
+ggplot(data_clear, aes(x = "", y = Retailer_Percentage)) +
+  geom_boxplot(width = 0.5, fill = "#8E44AD", alpha = 0.7, color = "black") +
+  labs(title = "Boxplot для процентов ретейлера", y="", x = "") +
+  scale_y_continuous(breaks = seq(min(data_clear$Retailer_Percentage), max(data_clear$Retailer_Percentage), by = 0.2)) +
+  theme_minimal()
+
+```
+
+Ретейлер обычно берет себе ~0,4--1,3%. Рассмотрим наблюдения, для которых процент очень маленький и очень большой:
+
+```{r}
+filtered_data_min <- data_clear %>% filter(Retailer_Percentage < 0.4)
+
+print_df(filtered_data_min)
+
+```
+
+Все наблюдения с маленьким процентом ретейлера одной марки, но чем вызвана такая маленькая наценка не до конца ясно. 
+
+```{r}
+filtered_data_max <- data_clear %>% filter(Retailer_Percentage > 1.3)
+
+print_df(filtered_data_max)
+
+```
+
+Наблюдение с самой большой наценкой -- это Porsche, для этой машины такая наценка не кажется необычной. 
+
+## 3. Проверка на нормальность признаков 
+
+Будем проводить сравнение для машин без учета внедорожников и спортивных автомобилей.
+
+```{r chunk_name_6, fig.width=15, fig.height=6}
+par(mfrow = c(2,5), mar = c(3, 4, 4, 3))  
+
+plot_qq_graph(other_cars_data$Retail, "Retail")
+plot_qq_graph(other_cars_data$Dealer, "Dealer")
+plot_qq_graph(other_cars_data$Engine, "Engine")
+plot_qq_graph(other_cars_data$Horsepower, "Horsepower")
+plot_qq_graph(other_cars_data$CityMPG, "CityMPG")
+plot_qq_graph(other_cars_data$HW_MPG, "HW_MPG")
+plot_qq_graph(other_cars_data$Weight, "Weight")
+plot_qq_graph(other_cars_data$WheelBase, "WheelBase")
+plot_qq_graph(other_cars_data$Length, "Length")
+plot_qq_graph(other_cars_data$Width, "Width")
+
+```
+
+```{r}
+normality_tests <- function(data, feature_name) {
+  test_lillie <- lillie.test(data)
+  test_ad <- ad.test(data)
+  test_shapiro <- shapiro.test(data)
+  
+  
+  results_df <- data.frame(
+    Признак = feature_name,
+    p_value_Lilliefors = test_lillie$p.value,
+    p_value_Anderson_Darling = test_ad$p.value,
+    p_value_Shapiro_Wilk = test_shapiro$p.value
+  )
+  
+  return(results_df)
+}
+
+
+features <- list(
+  Retail = other_cars_data$Retail,
+  Dealer = other_cars_data$Dealer,
+  Engine = other_cars_data$Engine,
+  Horsepower = other_cars_data$Horsepower,
+  CityMPG = other_cars_data$CityMPG,
+  HW_MPG = other_cars_data$HW_MPG,
+  Weight = other_cars_data$Weight,
+  WheelBase = other_cars_data$WheelBase,
+  Length = other_cars_data$Length,
+  Width = other_cars_data$Width
+)
+
+results_list <- lapply(names(features), function(feature) {
+  normality_tests(features[[feature]], feature)
+})
+
+
+results_df <- do.call(rbind, results_list)
+rownames(results_df) <- NULL
+
+print_df(results_df)
+
+```
+
+Стоило ожидать, что для Engine, CityMPG, HW_MPG, WheelBase, Width гипотеза о нормальности отвергнется, так как они -- дискретные признаки. Horsepower тоже скорее дискретный признак, нежеди непрерывный, для него нормальность тоже отвергаеся.
+
+Интересные результаты получились для Weight и Length. 
+
+По графику можно было бы предположить, что распределение Weight близко к нормальному, но отклонения на хвостах вносят слишком весомый вклад, поэтому все три теста отвергают нормальность. 
+
+Length -- дискретный признак, но для него при уровне значимости 0,01 гипотеза о нормальности не может быть отвергнута ни по одному из тестов, а при 0,05 ее отвергнет только тест Шапиро-Уилка. Также на np-plot он выглядит довольно близким к нормальному. 
+
+
+## Часть 3. Об анализе зависимостей
+
+Так как данные неоднородны, рассмотрим отдельно группу **SportUtil**.
+
+Посмотрим на количество пропусков и объем выборки:
+
+```{r}
+num_rows <- nrow(sport_util_data)
+print(num_rows)
+
+rows_with_missing <- sum(!complete.cases(sport_util_data))
+print(rows_with_missing)
+
+missing_per_column <- colSums(is.na(sport_util_data))
+variables_with_missing <- names(missing_per_column)[missing_per_column > 0]
+print(variables_with_missing)
+
+```
+
+Так как пропуска всего 2, то сразу уберем их из рассмотрения. Относительно объема выборки они составляют ~3,5%.
+
+```{r}
+
+sport_util_data |> 
+  filter(!is.na(WheelBase)) |>
+  select(-Name) |>
+  scatterPlotMatrix(regressionType = 1,
+                        corrPlotType = "Text",
+                        categorical = categories,
+                        plotProperties = list(noCatColor = "Indigo"),
+                        slidersPosition = list(dimCount = 10, xStartingDimIndex = 1, yStartingDimIndex = 1),
+                        controlWidgets = TRUE,
+                        height = 1200, width = 1250)
+```
+Так как выбросы удалялись для всех данных, а не для групп однородности, в группе SportUtil присутствуют выделяющиеся наблюдения, посмотрим на них. 
+
+```{r}
+su_out1 <- sport_util_data %>%
+  filter(Length < 160 | Length > 215 | WheelBase > 4.85)
+
+print_df(su_out1)
+```
+
+У Chevrolet Suburban есть страничка на Википедии и звезда на "Аллее Славы" за вклад в развитие кинематографа. Можно ли считать, что он outlier после этого? Это один из самых больших внедорожников на рынке, он выделяется на фоне остальных, поэтому удалим его. 
+
+GMC Yukon XL 2500 SLT уже странички в Википедии не имеет, но обладает комплектацией SLT, которая представляет собой более высокий уровень оснащения по сравнению с базовыми версиями автомобилей. Этот  внедорожник тоже достаточно крупный, поэтому его также удалим. 
+
+Jeep Wrangler Sahara convertible 2dr наоборот является очень компактным внедорожником, также выделяется относительно остальныых машин в выборке. 
+
+GMC Envoy XUV SLE, Isuzu Ascender S большое расстояние между передними и задними колесами объясняется особенностями моделей. 
+
+```{r}
+sport_util_data <- sport_util_data %>%
+  filter(Length >= 160 & Length <= 215 & WheelBase <= 4.85)
+
+```
+
+# Проверка на нормальность SportUtil
+
+```{r chunk_name_7, fig.width=15, fig.height=6}
+par(mfrow = c(2,5), mar = c(3, 4, 4, 3))  
+
+plot_qq_graph(sport_util_data$Retail, "Retail")
+plot_qq_graph(sport_util_data$Dealer, "Dealer")
+plot_qq_graph(sport_util_data$Engine, "Engine")
+plot_qq_graph(sport_util_data$Horsepower, "Horsepower")
+plot_qq_graph(sport_util_data$CityMPG, "CityMPG")
+plot_qq_graph(sport_util_data$HW_MPG, "HW_MPG")
+plot_qq_graph(sport_util_data$Weight, "Weight")
+plot_qq_graph(sport_util_data$WheelBase, "WheelBase")
+plot_qq_graph(sport_util_data$Length, "Length")
+plot_qq_graph(sport_util_data$Width, "Width")
+
+```
+
+```{r}
+normality_tests <- function(data, feature_name) {
+  test_lillie <- lillie.test(data)
+  test_ad <- ad.test(data)
+  test_shapiro <- shapiro.test(data)
+  
+  
+  results_df <- data.frame(
+    Признак = feature_name,
+    p_value_Lilliefors = test_lillie$p.value,
+    p_value_Anderson_Darling = test_ad$p.value,
+    p_value_Shapiro_Wilk = test_shapiro$p.value
+  )
+  
+  return(results_df)
+}
+
+
+features <- list(
+  Retail = sport_util_data$Retail,
+  Dealer = sport_util_data$Dealer,
+  Engine = sport_util_data$Engine,
+  Horsepower = sport_util_data$Horsepower,
+  CityMPG = sport_util_data$CityMPG,
+  HW_MPG = sport_util_data$HW_MPG,
+  Weight = sport_util_data$Weight,
+  WheelBase = sport_util_data$WheelBase,
+  Length = sport_util_data$Length,
+  Width = sport_util_data$Width
+)
+
+results_list <- lapply(names(features), function(feature) {
+  normality_tests(features[[feature]], feature)
+})
+
+
+results_df <- do.call(rbind, results_list)
+rownames(results_df) <- NULL
+
+print_df(results_df)
+
+```
+
+При уровне значимости 0,05 нет основания отвергать гипотезу о нормальности у всех признаков, кроме Engine.
+
+
+# Зависимости признаков
+
+```{r}
+
+sport_util_data |> 
+  filter(!is.na(WheelBase)) |>
+  select(-Name) |>
+  scatterPlotMatrix(regressionType = 1,
+                        corrPlotType = "Text",
+                        categorical = categories,
+                        plotProperties = list(noCatColor = "Indigo"),
+                        slidersPosition = list(dimCount = 10, xStartingDimIndex = 1, yStartingDimIndex = 1),
+                        controlWidgets = TRUE,
+                        height = 1200, width = 1250)
+```
+
+
+Все признаки попарно довольно сильно коррелируют.
+
+Видно, что Retail и Dealer максимально линейно зависимы (чего и стоило ожидать), также довольная сильная положительная зависимость видна y CityMPG и HW_MPG (что тоже неудивительно), у Weight и Width. Корреляция Horsepower и MPG; MPG и Weight высокая отрицательная.
+
+Также видна положительная зависимость между Lenght и Width; WheelBase и Lenght, Width;  отрицательная между Engine и MPG.
+
+Наименее выражены корреляции у WheelBase и Retail(Dealer), MPG. Наибольшия корреляция для WheelBase c  Lenght, Width.
+
+***Коэффициент корреляции Пирсона и Спирмена для группы SportUtil***
+
+```{r chunk_name_8, fig.width=15, fig.height=7}
+
+cor_matrix_pearson <- sport_util_data %>%
+  filter(!is.na(WheelBase)) %>%
+  select(Retail, Dealer, Engine, Horsepower, CityMPG, HW_MPG, Weight, WheelBase, Length, Width) %>%
+  cor()
+
+cor_matrix_spearman <- sport_util_data %>%
+  filter(!is.na(WheelBase)) %>%
+  select(Retail, Dealer, Engine, Horsepower, CityMPG, HW_MPG, Weight, WheelBase, Length, Width) %>%
+  cor(method = "spearman")
+
+par(mfrow = c(1, 2), mar = c(5, 5, 7, 2) + 8)  
+
+corrplot(cor_matrix_pearson, method = "number", tl.col = "black", tl.srt = 60, 
+         title = "Pearson Correlation")
+
+corrplot(cor_matrix_spearman, method = "number", tl.col = "black", tl.srt = 60, 
+         title = "Spearman Correlation")
+
+
+``` 
+
+Значения коэффициентов в случае Спирмена и Пирсона довольно похожи, максимальная разность коэффициентов равна 0,06. Коэффициенты довольно похожи, так как мы не отвергли гипотезу о нормальности распределения всех признаков (кроме Engine), в случае нормальной модели коэффициенты связаны формулой $\rho = 2 \sin\left(\frac{\pi}{6}\rho_s\right)$.
+
+## Интерпретация зависимостей
+
+**Retail и Dealer**
+
+Причиной здесь является цена Dealer, а следствием -- Retail: чем дороже машина будет куплена у дилера, тем дороже ее продатут в розницу.
+
+**Horsepower и Retail(Dealer)**
+
+Причина -- Horsepower, следствие -- Retail(Dealer): чем больше у машины лошадиных сил, тем выше ее стоимость. 
+
+**MPG и Retail(Dealer)**
+
+Очень интересная зависимость, так как чем выше mpg, тем больше автомобиль может проехать на одном галлоне топлива, то есть чем больше mpg, тем более экономичный у автомобиля расход топлива, поэтому кажется, что цена на такие автомобили должна быть больше, но на графиках мы видим отрицательную зависимость.
+
+**Horsepower и Engine**
+
+Больший объем двигателя обычно позволяет большему количества топлива сгорать в цилиндрах, что в свою очередь может привести к большей выработке мощности, а значит большей скорости. Engine -- причина, Horsepower -- следствие.
+
+**MPG и Engine, Horsepower**
+Чтобы достичь большей топливной экономичности, производители часто используют более компактные и меньшие по объему двигатели, которые могут быть менее мощными, но более эффективными в использовании топлива. Поэтому в случае высокого показателя mpg Engine и Horsepower будут меньше.
+
+Тогда можно предположить, что водители выбирают более мощные и скоростные автомобили, вместо более экономичных, чем и вызвана отрицательная корреляция MPG и Retail(Dealer).
+
+**WheelBase и Length**
+
+Чем больше расстояние между колесами, тем длиннее автомобиль. WheelBase -- причина,  Length -- следствие. 
+
+**Length, WheelBase, Width  и Weight**
+
+Чем больше, тем он тяжелее, то есть чем больше Length, WheelBase, Width (причина), тем больше Weight (следствие). 
+
+**Horsepower и Weight**
+
+Чем больше мощность автомобиля (причина), тем больше его вес (следствие). Чтобы добиться высокой мощности, двигатель, трансмиссия, карданный вал, оси, должны быть увеличены, в виду этого увеличивается вес автомобиля.
+
+
+## Частные корреляции
+
+Посмотрим на корреляции между переменными **без учета влияния количества цилиндров.** 
+
+```{r chunk_name_10, fig.width=15, fig.height=7}
+partial.correlation <- function(df, ...) {
+  df  |>
+    filter(!is.na(Retail) &
+             !is.na(Dealer) &
+             !is.na(Engine) &
+             !is.na(Horsepower) &
+             !is.na(CityMPG) &
+             !is.na(HW_MPG) &
+             !is.na(Weight) &
+             !is.na(WheelBase) &
+             !is.na(Length) &
+             !is.na(Width) &
+             !is.na(Cylinders) &
+             !is.na(Wheel_type)) |>
+    select(-Name) |>
+    group_by(...) |>
+    mutate(retail.shifted = Retail - mean(Retail),
+           dealer.shifted = Dealer - mean(Dealer), 
+           engine.shifted = Engine - mean(Engine),
+           horsepower.shifted = Horsepower - mean(Horsepower),
+           citympg.shifted = CityMPG - mean(CityMPG),
+           hwmpg.shifted = HW_MPG - mean(HW_MPG),
+           weight.shifted = Weight - mean(Weight),
+           wheelbase.shifted = WheelBase - mean(WheelBase),
+           length.shifted = Length - mean(Length),
+           width.shifted = Width - mean(Width)) |>
+    group_by(.drop = TRUE) |>
+    select(retail.shifted , dealer.shifted, engine.shifted, horsepower.shifted, citympg.shifted, hwmpg.shifted, weight.shifted, wheelbase.shifted, length.shifted, width.shifted) |>
+    cor() |>
+    corrplot(method = "number", tl.col = "black", tl.srt = 60)
+}
+
+partial.correlation(sport_util_data, Cylinders)
+```
+
+Корреляции, которые сложно было объяснить, сильно уменьшились и стали практически незначимыми. При этом корреляция между переменными, взаимосвязь между котороми можно объяснить, хоть и немного уменьшилась, но все равно осталась довольно высокой и значимой. 
+
+Для сравнения посмотрим на частные корреляции **без учета влияния мощности.**
+
+
+```{r chunk_name_11, fig.width=15, fig.height=7}
+sport_util_data |> 
+  group_by(Horsepower) |> 
+  mutate(retail.shifted = Retail - mean(Retail),
+           dealer.shifted = Dealer - mean(Dealer), 
+           engine.shifted = Engine - mean(Engine),
+           citympg.shifted = CityMPG - mean(CityMPG),
+           hwmpg.shifted = HW_MPG - mean(HW_MPG),
+           weight.shifted = Weight - mean(Weight),
+           wheelbase.shifted = WheelBase - mean(WheelBase),
+           length.shifted = Length - mean(Length),
+           width.shifted = Width - mean(Width)) |>
+  group_by(.drop = TRUE) |> select(retail.shifted , dealer.shifted, engine.shifted, citympg.shifted, hwmpg.shifted, weight.shifted, wheelbase.shifted, length.shifted, width.shifted) |>
+    cor() |>
+    corrplot(method = "number", tl.col = "black", tl.srt = 60)
+```
+
+Корреляции по сравнению с коэффициентами Пирсона и Спирмена также уменьшились, но не так сильно как в случае частных корреляций без учета влияния цилиндров. Таким образом, количество цилиндров оказывает большее влияние на корреляции между признаками, чем мощность. 
