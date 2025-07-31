@@ -1,0 +1,591 @@
+---
+output: html_document
+error: FALSE
+warning: FALSE
+---
+```{r setup, include=FALSE} 
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+```
+
+## Регрессионный анализ данных car2004
+ 
+```{r}
+library(memisc)
+library(coefplot)
+library(glmnet)
+library(MASS)
+library(QuantPsyc)
+library(ellipse)
+library(olsrr)
+library(kableExtra)
+library(zoo)
+library(ppcor)
+library(readr)
+library(ggplot2)
+library(hrbrthemes)
+library(tidyverse)
+library(readxl)
+library(GGally)
+library(psych)
+library(plotly)
+library(nortest)
+library(summarytools)
+library(scatterPlotMatrix)
+library(viridis)
+library(patchwork)
+library(gridExtra)
+library(ggpubr)
+library(car)
+library(e1071)
+library(cowplot)
+library(corrplot)
+library(reshape2)
+
+print_df <- function(df)
+{
+  df |>
+    kable(format = "html") |>
+    kable_styling() |>
+    kableExtra::scroll_box(width = "100%", height = "100%")
+}
+
+create_ggpairs <- function(data, density_diag = TRUE, fig_width = 15, fig_height = 7) {
+  if (density_diag) {
+    ggpairs(data, diag = list(continuous = "densityDiag", discrete = "barDiag", na = "naDiag", mapping = aes(fill = "red")), fig.width = fig_width, fig.height = fig_height)
+  } else {
+    ggpairs(data, diag = list(continuous = "barDiag", mapping = aes(fill = "red")), fig.width = fig_width, fig.height = fig_height)
+  }
+}
+
+```
+
+
+## 1. Загрузка данных
+
+```{r}
+data <- read_excel("C:/Users/redmi/Documents/R analysis/car2004.xls", na = "*")
+colnames(data) <- gsub("-", "_", colnames(data))
+
+head(data, 5) |>
+ print_df()
+```
+
+
+## 2. Описание признаков
+
+Частота мод
+```{r}
+modes<-summarize(data, across(Name:Width, function(x) max(table(x))))
+print_df(modes)
+```
+
+Количество уникальных значений по каждому признаку
+```{r}
+unique_counts <- sapply(data, function(x) n_distinct(x, na.rm = TRUE))
+print(unique_counts)
+```
+
+***Комментарий.*** Несмотря на то, что у Horsepower довольно большая частота мод, но уникальных значений примерно 25% от всего объема данных, поэтому я посчитала, что логичнее будет считать этот признак непрерывным.  
+
+1. ***Name*** - Название автомобиля - **качественный признак**
+2. ***Sport*** - Спортивная машина (1=да, 0=нет) - **качественный признак**
+Легкие,  обычно имеют мощные двигатели, способные развивать высокие скорости, чаще всего имеют задний или полный привод.
+3. ***SportUtil*** - Внедорожник (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется высокой посадкой, вместительным салоном, большим клиренсом и возможностью полного привода. 
+4. ***Wagon*** - Универсал (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется увеличенным багажным отсеком, обычно имеет передний или полный привод.
+5. ***Minivan*** - Минивэн  (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется большим количеством места для пассажиров и багажа, наиболее характерен передний привод. Некоторые модели минивэнов предлагают неплохую экономию топлива, учитывая их размер и вместительность.
+6. ***Pickup*** - Пикап  (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется мощными двигателями и возможностью заднего или полного приводов.  
+7. ***All-wheel*** - Полный привод (1=да, 0=нет) - **качественный признак**
+8. ***Rear-wheel*** - Задний привод (1=да, 0=нет) - **качественный признак**
+9. ***Retail*** - Рекомендованная розничная цена в долларах (цена продажи диллером) - **количественный непрерывный**
+10. ***Dealer*** - Закупочная цена для дилера в долларах - **количественный непрерывный**
+11. ***Engine*** - Объем двигателя в литрах - **количественный дискретный**
+12. ***Cylinders*** - Число цилиндров (=-1 для роторного двигателя) - **количественный дискретный**
+13. ***Horsepower*** - Лошадиные силы - **количественный дискретный**
+14. ***CityMPG*** - Ожидаемый пробег в милях на галлон топлива для автомобиля в условиях городского движения. - **количественный дискретный**
+15. ***HW_MPG*** - Ожидаемый пробег в милях на галлон топлива для автомобиля в условиях движения по шоссе или трассе при постоянной скорости - **количественный дискретный**
+
+В городском цикле обычно встречаются частые остановки, старты и пробки, что приводит к более частому использованию тормозов и ускорителей. Это может уменьшить экономию топлива.
+
+В условиях шоссейного движения меньше остановок и меньше стартов, что может способствовать более высокой экономии топлива.
+
+То есть ожидается, что HW_MPG > CityMPG.
+
+16. ***Weight*** - Вес автомобиля в фунтах - **количественный непрерывный**
+17. ***WheelBase*** -  Расстояние между передними и задними колесами в дюймах - **количественный дискретный**
+18. ***Length*** - Длина автомобиля в дюймах - **количественный дискретный**
+19. ***Width*** - Ширина автомобиля в дюймах - **количественный дискретный**
+
+***Комментарий.*** Почему-то здесь считается, что "Sport" -- это тоже тип кузова. Предположим, что это означает типы кузовов, наиболее характерные для спортивных автомобилей, например, Roadster. Тогда к Other (6 тип кузова) мы отнесем Coupe, Sedan и Hatchback. 
+
+***Две группы качаственных признаков -- тип кузова и тип привода уже представленны в виде dummy variables (при этом не учтены "другой" тип кузова и передний привод, поэтому никакие признаки убирать не нужно), поэтому никаких дополнительных манипуляций с данными производить не нужно. ***
+
+## 3. Симметричность
+
+```{r chunk_name_1, fig.width=20, fig.height=13}
+data_select <- data %>% select(-Name, -Sport, -SportUtil,-Wagon, -Minivan, -Pickup, -All_wheel, -Rear_wheel, -Cylinders)
+
+create_ggpairs(data_select, density_diag = FALSE) 
+```
+
+Наблюдения Retail,Dealer,Engine,Horsepower,CityMPG,HW_MPG, Weight, WheelBase имеют хвост вправо, прологарифмируем их и построим графики зависимостей признаков. 
+
+## 4. Графики зависимостей признаков
+
+```{r chunk_name_2, fig.width=20, fig.height=13}
+data_log <- data %>% 
+  mutate_at(vars(Retail, Dealer, Engine, Horsepower, CityMPG, HW_MPG, Weight, WheelBase), ~log(.))
+
+data_select <- data_log %>% select(-Name, -Sport, -SportUtil,-Wagon, -Minivan, -Pickup, -All_wheel, -Rear_wheel, -Cylinders)
+
+create_ggpairs(data_select, density_diag = FALSE) 
+```
+
+## 5. Заполнение пропусков
+
+Количество пропущенных значений для каждого признака
+ 
+```{r}
+na_count <- colSums(is.na(data_log))
+print(na_count)
+```
+
+Так как пропусков не так много, то заполним их медианным значением по каждому признаку.
+
+```{r}
+cols_to_fill <- c("CityMPG", "HW_MPG", "Weight", "WheelBase", "Length", "Width")
+filled_cols <- na.aggregate(data_log[, cols_to_fill], FUN = median, na.rm = TRUE)
+data_log[, cols_to_fill] <- filled_cols
+```
+
+
+# 6. Корреляция между признаками 
+
+На основе предыдущего графика, все корреляции значимы.
+
+```{r chunk_name_4, fig.width=16, fig.height=9}
+
+data_reg <- data_log[, c(names(data_log)[!names(data_log) %in% c("Name", "Dealer", "Retail")], "Retail")]
+
+correlation_matrix <- cor(data_reg)
+
+correlation_data <- melt(correlation_matrix)
+
+options(repr.plot.width=14, repr.plot.height=8)
+
+ggplot(data = correlation_data, aes(x = Var1, y = Var2, fill = value, label = round(value, 2))) +
+  geom_tile(color = "white") +
+  geom_text(color = "black", size = 4, hjust = 0.5, vjust = 0.5) +  
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1,1), space = "Lab", 
+                       name="Correlation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, size = 12, hjust = 1),
+        axis.title = element_blank()) +  
+  coord_fixed()
+
+```
+
+Так как CityMPG и HW_MPG сильно коррелируют (корреляция равна 0,94), то уберем один из признаков. Так как корреляция CityMPG и Retail больше, то оставим его. 
+
+Cylinders и Engine тоже сильно коррелируют (корреляция равна 0,9), так как корреляция Cylinders и Retail больше, то оставим его.
+
+Также уберем Weight.
+
+***Убедимся, что эти переменные стоит убрать, посмотрев на полную модель***
+
+```{r}
+model_0 <- lm(Retail ~ Sport + SportUtil +  Wagon + Minivan + Pickup +  All_wheel +  Rear_wheel +                                     Engine + Cylinders + Horsepower +  CityMPG + HW_MPG +  Weight + WheelBase +  
+                       Length  +  Width, data = data_log)
+summary(model_0)
+ols_vif_tol(model_0)
+```
+
+VIF показывает насколько увеличивается дисперсия оценок коэффициентов из-за мультиколлинеарности. 
+
+Посмотрев на модель со всеми переменными, можем убедиться, что эти переменные стоит убрать, так как значение VIF для них велико (больше 10). 
+
+**Почему стоит избавляться от мультиколлинеарности**
+
+В случае наличия мультиколлинеарности матрица регрессоров имеет не полный ранг, а значит имеющиеся наблюдения не позволяют получить оценки МНК однозначно. Мультиколлинеарность также затрудняет интерпретацию коэффициентов регрессии. 
+
+## Модель
+
+```{r}
+data_log <- data_log %>%
+  mutate_at(vars(-Name), scale)
+```
+
+```{r}
+model <- lm(Retail ~ Sport + SportUtil +  Wagon + Minivan + Pickup +  All_wheel +  Rear_wheel +
+                     Cylinders + Horsepower +  CityMPG +  WheelBase +  
+                     Length  +  Width, data = data_log)
+summary(model)
+print(paste("AIC:", AIC(model)))
+```
+
+Среди значимых коэффициентов наибольший вклад вносит Horsepower, а наименьший (по модулю) -- Cylinders. Модель значима: так как значение p-value очень мало, то нулевая гипотеза о незначимости регрессии отвергается. Значения $R^2$ и $R^2_{adjusted}$ довольно велики, значит, модель хорошо соответствует данным. 
+
+***Корреляции между оценками коэффициентов***
+
+```{r chunk_name_5, fig.width=16, fig.height=9}
+model_matrix <- model.matrix(model)[,-1]
+corr_matrix <- cor(model_matrix)
+
+corrplot(corr_matrix, 
+         method = "color",
+         type = "upper", 
+         tl.col = "black", 
+         tl.srt = 45,
+         addCoef.col = "black")
+```
+
+Из графика видно, что корреляции между Horsepower и CityMPG, Cylinders и CityMPG, Width и CityMPG, WheelBase, Length, Width довольно велики, так что в дальнeйшем имеет смысл убрать из модели какие-то из этих признаков. 
+
+***Доверительный эллипсоид***
+```{r}
+which.coef <- c("Cylinders", "Horsepower")
+confidenceEllipse(model, which.coef = which.coef, levels = 0.95, col = c("darkblue"))
+```
+
+В данном случае коэффициенты значимы в совокупности (даже если один близок к 0, то второй вполне далек и наоборот).
+
+***Доверительные интервалы***
+
+```{r}
+coefplot(model, col = c("darkblue"))
+```
+
+Если доверительные интервалы не включают 0, это указывает, что коэффициенты статистически значимы. В данном случае это выполнено для Horsepower, Cylinders, Rear_wheel, All_wheel, Pickup, также можно учесть SportUtil и Sport.
+
+## Выбор оптимальной модели: VIF, частные корреляции, stepwise forward и backward
+
+***Посмотрим на значения VIF***
+
+VIF для всех коэффициентов, кроме Length, меньше 5, так что можно считать, что мультиколлинеарности нет (так как для Length VIF совсем немного превышает 5, то будем считать, что эту переменную пока не стоит убирать).
+
+```{r}
+ols_vif_tol(model)
+```
+
+
+***Частные корреляции***
+
+Второй столбец содержит частные корреляции между Retail и одним из регрессоров без учета влияния остальных регрессоров. То есть эти коэффициенты могут быть полезны для понимания вклада каждого регрессора в объяснение изменчивости зависимой переменной независимо от влияния других переменных в модели. Чем больше по модулю частная корреляция, тем больше линейная связь между соответствующим регрессором и зависимой переменной.
+
+Наибольшие частные корреляции в данном случае у Horsepower, Cylinders, Rear_wheel, All_wheel,  Pickup. 
+```{r}
+ols_correlations(model)
+```
+
+***Stepwise forward***
+
+```{r}
+ols_step_forward_aic(model)  
+
+k1 <- ols_step_forward_aic(model)  
+plot(k1) 
+```
+
+```{r}
+forward_model <- lm(Retail ~ Sport + SportUtil + Pickup +  All_wheel +  Rear_wheel +
+                     Cylinders + Horsepower + Length, data = data_log)
+```
+
+
+***Stepwise backward***
+```{r}
+ols_step_backward_aic(model)
+
+k2 <- ols_step_backward_aic(model)
+plot(k2)
+```
+
+```{r}
+backward_model <- lm(Retail ~ Sport + SportUtil + Pickup +  All_wheel +  Rear_wheel +
+                     Cylinders + Horsepower + Width, data = data_log)
+```
+
+***Сравним результаты***
+
+Значения R-squared для всех моделей равны, но в случае forward_model и backward_model коэффициент SportUtil стал значимым.  
+```{r}
+compare <- mtable(model, forward_model, backward_model)
+print(compare)
+```
+***Сравним Adjusted R-squared***
+
+Adjusted R-squared в случае forward_model и backward_model немного увеличился и наибольший он для backward_model. 
+
+```{r}
+r_adj_squared <- c(summary(model)$adj.r.squared,
+                   summary(forward_model)$adj.r.squared,
+                   summary(backward_model)$adj.r.squared)
+
+comparison_table_1 <- data.frame(Model = c("Model", "Forward", "Backward"),
+                                 R_adj_sq= r_adj_squared)
+print_df(comparison_table_1)
+```
+
+
+***Сравним AIC***
+
+По AIC лучшей моделью считается backward_model, так как значение AIC для нее минимально. 
+
+```{r}
+aic_values <- c(AIC(model), AIC(forward_model), AIC(backward_model))
+
+comparison_table_2 <- data.frame(Model = c("Model", "Forward", "Backward"),
+                                AIC = aic_values)
+print_df(comparison_table_2)
+```
+
+
+Коэффициенты Length и  Width -- незначимые, попробуем посмотреть на модель без них.
+
+```{r}
+step_model <- lm(Retail ~ Sport + SportUtil + Pickup +  All_wheel +  Rear_wheel +
+                     Cylinders + Horsepower, data = data_log)
+summary(step_model)
+print(paste("AIC:", AIC(step_model)))
+```
+
+AIC совсем немного, но стал меньше, а также в данной модели все коэффициенты значимы. Совсем немного уменьшились Adjusted R-squared и Multiple R-squared, но разница совсем минимальна, поэтому выберем данную модель. 
+
+## Исследование выбранной модели
+
+```{r}
+ols_vif_tol(step_model)
+```
+
+Все показатели VIF меньше 5, значит, мультиколлинеарности нет. 
+
+```{r}
+ols_correlations(step_model)
+```
+
+Частные корреляции увеличились и теперь все регрессоры влияют на зависимую переменную. 
+
+***Residuals vs predicted***
+```{r}
+plot(step_model, which=3, col=c("darkblue")) 
+```
+
+Pасположение остатков по линейной регрессии на графике будет отражать характер зависимости между регрессорами и зависимой переменной. В идеальной ситуации остатки должны случайно распределяться вокруг нуля без каких-либо видимых закономерностей. Однако если на графике видны какие-либо закономерности, это может указывать на наличие гетероскедастичности, проблему спецификации. Также на этом графике можно увидеть выбросы.
+
+В данном случае остатки довольно равномерно распределены относительно y=0, значит, остатки гомоскедантичны и нет ошибки спецификации. 
+
+***Нормальность остатков***
+
+**Зачем нужна нормальность остатков**
+
+1) Для проверки гипотез, тогда критерии будут точными. 
+
+2) В случае нормальности оценка OLS совпадает с оценкой MLE. Тогда полученная оценка коэффициентов регрессии будет асимптотически эффективной (по свойствам MLE).
+
+```{r}
+plot(step_model, which=2, col=c("darkblue")) 
+```
+
+Точки отклоняются от линии на концах (в начале и в конце графика), это может свидетельствовать о наличие тяжелых хвостов в распределении остатков, т.е. о наличии выбросов или нарушении нормальности.
+
+***Гистограмма остатков***
+
+```{r}
+ggplot(data.frame(Standardized_Residuals = rstandard(step_model)), 
+       aes(x = Standardized_Residuals)) +
+       geom_histogram(fill = "skyblue", color = "black", aes(y = ..count..)) +
+       labs(title = "Histogram of Standardized Residuals", x = "Standardized Residuals", y = "Frequency")
+```
+
+Из гистограммы видно, что распределение остатков несильно отличается от нормального, значит, можно считать, что остатки распределены нормально. 
+
+***Externally Studentized vs Internally Studentized residuals***
+
+Internally studentized: $\frac{r_i}{\hat{\sigma} \sqrt{1-h_{ii}}}.$ 
+
+Externally studentized: $\frac{r_i}{\hat{\sigma}^{(i)} \sqrt{1-h_{ii}}}.$ 
+
+То есть по сути сравниваются дисперсии. 
+
+Данный график позволяет выявить наличие выбросов и наблюдений с высоким влиянием. 
+
+Так как нет точек, находящихся далеко от прямой y=x, то можно сказать, что дисперсии примерно равны. На "хвостах" графика есть точки, отстаящие от остальных, что свидеьельствует о том, что они могут являться выбросами.
+
+```{r}
+data_res <- data.frame(Internally_Studentized = rstandard(step_model), Externally_Studentized = rstudent(step_model))
+
+ggplot(data_res, aes(x = Internally_Studentized, y = Externally_Studentized)) +
+  geom_point(color = "darkblue") + 
+  geom_smooth(method = "lm", se = FALSE, color = "red", lwd = 0.1) +  
+  labs(title = "Externally Studentized vs Internally Studentized residuals", x = "Internally Studentized ", y = "Externally Studentized")
+```
+
+
+## Выбросы по Куку
+
+Расстояние по Куку показывает выбросы по отношению к регрессии, оно измеряет влияние каждого наблюдения на оценки коэффициентов регрессии.
+
+```{r}
+cooks_distance <- cooks.distance(step_model)
+
+plot(cooks_distance, 
+     col = "darkblue",
+     type = "h", 
+     main = "Cook's Distance",
+     xlab = "Observation",
+     ylab = "Cook's Distance")
+
+abline(h = 1, col = "red", lty = 2)
+```
+
+Упорядочим по возрастанию.
+
+```{r}
+sorted_indices <- order(cooks_distance, decreasing = TRUE)
+
+plot(head(cooks_distance[sorted_indices], 100),
+     col = "darkblue",
+     type = "h", 
+     main = "Cook's Distance",
+     ylab = "Cook's Distance")
+
+abline(h = 1, col = "red", lty = 2)
+
+```
+
+На основе этого графика можно сказать, что наблюдения 70 и 288 являются выбросами, так как для них происходит скачок при изображении расстояний.
+
+## Выбросы по Махаланобису
+
+Расстояние по Махаланобису показывает выбросы по отношению к распределению регрессоров. 
+
+```{r}
+selected_cols <- c("Sport", "SportUtil", "Pickup", "All_wheel", "Rear_wheel", "Cylinders", "Horsepower")
+selected_data <- data_log[, selected_cols]
+cov_matrix <- cov(selected_data)
+
+mahalanobis_distance <- mahalanobis(selected_data, center = colMeans(selected_data), cov = cov_matrix)
+
+threshold <- qchisq(0.95, length(selected_cols))
+
+plot(mahalanobis_distance, 
+     main = "Mahalanobis Distance Plot",
+     xlab = "Observation",
+     ylab = "Mahalanobis Distance",
+     type = "h", 
+     col = "darkblue") 
+
+abline(h = threshold, col = "red", lty = 2)
+```
+
+Упорядочим по возрастанию.
+
+```{r}
+ordered_indices <- order(mahalanobis_distance, decreasing = TRUE)  
+
+plot(head(mahalanobis_distance[ordered_indices], 100), 
+     main = "Mahalanobis Distance Plot",
+     ylab = "Mahalanobis Distance",
+     type = "h", 
+     col = "darkblue") 
+
+abline(h = threshold, col = "red", lty = 2)
+```
+
+На основе этого графика можно сказать, что наблюдения 272 и 273 являются выбросами, так как для них происходит скачок при изображении расстояний.
+
+## RStudent vs Leverage
+
+```{r}
+ols_plot_resid_lev(step_model)
+```
+
+Оси графика:
+
+1. Ось X ("Leverage"): Показывает значение плеча влияния для каждого наблюдения. Плечо влияния отражает потенциальное влияние каждого наблюдения на оценки параметров модели. Высокие значения плеча влияния указывают на то, что наблюдение имеет большое влияние на модель.
+
+2.  Ось Y ("RStudent"): Показывает стьюдентизированные остатки (остатки, делённые на оценку их стандартного отклонения, учитывая число степеней свободы).
+
+На основе данного графика можно заключить, что выбросами являются наблюдения 70, 272, 273, 288, что согласуется с тем, какие выбросы были получены на основе графиков расстояний по Куку и по Махаланобису. 
+
+## Выбросы
+
+```{r}
+selected_rows <- data[c(70, 272, 273, 288), ]
+print_df(selected_rows)
+```
+
+На основе анализа прошлого семестра эти наблюдения были также выявлены как выбросы и вот почему:
+
+1. У 70 высокое mpg, так как Honda Insight 2dr является гибридными автомобилем (такие автомобили используют комбинацию бензинового двигателя и электрической системы), это повышает эффективность топлива. 
+
+2 и 3. Mazda RX-8 4dr automatic и Mazda RX-8 4dr manual с очень маленьким объемом двигателя, но при этом хорошими показателями mpg –- автомобили с роторным двигателем, который отличается от типичных поршневых двигателей и обладает рядом особенностей, которые могут влиять на экономию топлива и производительность. Они являются единственными автомобилями с таким типом двигателя в выборке.
+
+4. У 288 высокая цена и довольно низкое mpg. Porsche 911 GT2 –- спортивный автомобиль. Он не только по Retail и MPG является выбросом, но и по Horsepower (477 (не в log шкале) -– это очень много, по сравнению с остальными автомобилями).
+
+***Построим модель без выбросов***
+
+```{r}
+data_log <- data %>% 
+  mutate_at(vars(Retail, Dealer, Engine, Horsepower, CityMPG, HW_MPG, Weight, WheelBase), ~log(.))
+
+data_log_clean <- data_log[-c(70, 272, 273, 288), ]
+
+new_model <- lm(Retail ~ Sport + SportUtil + Pickup +  All_wheel +  Rear_wheel +
+                     Cylinders + Horsepower, data = data_log_clean)
+summary(new_model)
+```
+Значения Multiple R-squared и Adjusted R-squared совсем немного, но увеличились. 
+
+**Предскажем что-то по модели**
+
+```{r}
+new_data <- data.frame(
+  Sport = 1,
+  SportUtil = 0,
+  Pickup = 0,
+  All_wheel = 0,
+  Rear_wheel = 1,
+  Cylinders = 4,
+  Horsepower = log(200)
+)
+
+prediction <- predict(new_model, newdata = new_data)
+
+print(exp(prediction))
+```
+Посмотрим на цены автомобилей с похожими характеристиками. 
+
+```{r}
+subset_data <- data[data$Horsepower >= 200 & data$Horsepower < 250 & data$Sport == 1 & data$Rear_wheel == 1, ]
+print_df(subset_data)
+```
+
+Полученный прогноз кажется хорошо согласуется с данными и отражает цену, которая может быть у автомобиля с данными характеристиками.
+
+***Доверительный и предсказательный интервал***
+
+```{r}
+confidence_int <- predict(new_model, newdata = new_data, interval = "confidence", level = 0.95)
+print(exp(confidence_int))  
+```
+
+Доверительный интервал является оценкой диапазона, в котором, с заданным уровнем доверия, находится среднее значение прогнозируемой переменной.
+
+Используется для оценки неопределенности вокруг среднего значения прогнозируемой переменной.
+
+```{r}
+prediction_int <- predict(new_model, newdata = new_data, interval = "prediction", level = 0.95)
+print(exp(prediction_int))
+```
+
+Предсказательный интервал является оценкой диапазона, в котором, с заданной вероятностью, находится будущее наблюдение. 
+
+Используется для оценки неопределенности вокруг прогноза для нового наблюдения.
+
+Ширина предсказательного интервала больше, чем ширина доверительного интервала, так как он включает в себя случайную ошибку модели.
+
