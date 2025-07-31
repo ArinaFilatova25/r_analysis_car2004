@@ -1,0 +1,552 @@
+---
+output: html_document
+error: FALSE
+warning: FALSE
+---
+
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+
+library(mclust)
+library(purrr)
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(zoo)
+library(caret)
+library(car)
+library(stats)
+library(readr)
+library(DT)
+library(formattable)
+library(hrbrthemes)
+library(tidyverse)
+library(plotly)
+library(GGally)
+library(psych)
+library(qgraph)
+library(corrplot)
+library(factoextra)
+library(MASS)
+library(klaR)
+library(cluster)
+library(FactoMineR)
+library(gridExtra)
+library(maotai)
+library(useful)
+library(clusterSim)
+library(clValid)
+library(kknn)
+
+print_df <- function(df) {
+  datatable(df, 
+            options = list(scrollX = TRUE,  # Горизонтальная прокрутка
+                           pageLength = 10, 
+                           autoWidth = TRUE),
+            class = 'display nowrap',       # Отключение переноса текста для удобной прокрутки
+            rownames = FALSE)               # Отключение номеров строк 
+}
+
+create_ggpairs <- function(data, density_diag = TRUE, fig_width = 15, fig_height = 7) {
+  if (density_diag) {
+    ggpairs(data, diag = list(continuous = "densityDiag", discrete = "barDiag", na = "naDiag", mapping = aes(fill = "red")), fig.width = fig_width, fig.height = fig_height)
+  } else {
+    ggpairs(data, diag = list(continuous = "barDiag", mapping = aes(fill = "red")), fig.width = fig_width, fig.height = fig_height)
+  }
+}
+
+```
+
+# Кластеризация данных car2004
+
+## Загрузка данных
+
+```{r}
+data_car <- read_excel("C:/Users/redmi/OneDrive/Документы/R analysis/car2004.xls", na = "*")
+colnames(data_car) <- gsub("-", "_", colnames(data_car))
+
+# Добавление доп.столбцов
+data_car$Other <- ifelse(rowSums(data_car[c("Sport", "SportUtil", "Wagon", "Minivan", "Pickup")]) == 0, 1, 0)
+data_car$Front_wheel <- ifelse(rowSums(data_car[c("All_wheel", "Rear_wheel")]) == 0, 1, 0)
+
+# Создание категориальных переменных
+data_car <- data_car %>%
+mutate(
+  Body_type = factor(case_when(
+    Sport == 1 ~ 1,
+    SportUtil == 1 ~ 2,
+    Wagon == 1 ~ 3,
+    Minivan == 1 ~ 4,
+    Pickup == 1 ~ 5,
+    Other == 1 ~ 6,
+    TRUE ~ NA_integer_
+  ), levels = c(1, 2, 3, 4, 5, 6), labels = c("Sport", "SportUtil", "Wagon", "Minivan", "Pickup", "Other"))
+)
+
+data_car <- data_car %>%
+  mutate(
+    Wheel_type = factor(case_when(
+      All_wheel == 1 ~ 1,
+      Rear_wheel == 1 ~ 2,
+      Front_wheel == 1 ~ 3,
+      TRUE ~ NA_integer_  
+    ), levels = c(1, 2, 3), labels = c("All_wheel", "Rear_wheel", "Front_wheel"))
+  )
+
+head(data_car, 5) |>
+ print_df()
+```
+
+
+Так как пропусков не так много, то заполним их медианным значением по каждому признаку.
+
+```{r}
+cols_to_fill <- c("CityMPG", "HW_MPG", "Weight", "WheelBase", "Length", "Width")
+filled_cols <- na.aggregate(data_car[, cols_to_fill], FUN = median, na.rm = TRUE)
+data_car[, cols_to_fill] <- filled_cols
+```
+
+
+Наблюдения Retail, Dealer, Engine, Horsepower, CityMPG, HW_MPG, Weight, WheelBase имеют хвост вправо, прологарифмируем их и построим графики зависимостей признаков. 
+
+```{r chunk_name_1, fig.width=20, fig.height=13}
+data_log <- data_car %>% 
+  mutate_at(vars(Retail, Dealer, Engine, Horsepower, CityMPG, HW_MPG, Weight, WheelBase), ~log(.))
+
+#Убираем сильно выделяющиеся наблюдения
+data_log <- data_log[-c(69, 94, 70, 300, 97, 273, 272, 259, 305, 288, 241, 242, 419), ]
+
+data_select <- data_log %>% 
+  dplyr::select(-Name, -Sport, -SportUtil,-Wagon, -Minivan, -Pickup, -All_wheel, -Rear_wheel, -Cylinders, -Other, -Front_wheel, -Body_type, -Wheel_type)
+
+create_ggpairs(data_select, density_diag = FALSE) 
+```
+
+**С раскраской по Body_type**
+
+```{r chunk_name_body, fig.width=20, fig.height=13}
+data_select_bt <- data_log %>% 
+  dplyr::select(-Name, -Sport, -SportUtil,-Wagon, -Minivan, -Pickup, -All_wheel, -Rear_wheel, -Cylinders, -Other, -Front_wheel,  -Wheel_type)
+
+ggpairs(data_select_bt, aes(color = Body_type, alpha = 0.7))
+```
+
+
+**С раскраской по Wheel_type**
+
+```{r chunk_name_wheel, fig.width=20, fig.height=13}
+data_select_wt <- data_log %>% 
+  dplyr::select(-Name, -Sport, -SportUtil,-Wagon, -Minivan, -Pickup, -All_wheel, -Rear_wheel, -Cylinders, -Other, -Front_wheel,  -Body_type)
+
+ggpairs(data_select_wt, aes(color = Wheel_type, alpha = 0.7))
+```
+
+
+#### Результат PCA
+
+```{r}
+data_pca <- data_log %>% 
+  dplyr::select(Retail, HW_MPG, WheelBase, Width, Length, Weight, Horsepower, Engine, CityMPG, Cylinders, Body_type, Wheel_type)
+
+res_car_pca <- PCA(data_pca, ncp = 9, quali.sup = c(10:12), graph = FALSE)
+
+fviz_pca_ind(res_car_pca, 
+              geom.ind = "point",
+              pointsize = 3,
+              col.ind  = 'darkblue')
+```
+ 
+## k-means
+
+```{r}
+data_clust <- data_log %>% 
+  dplyr::select(Retail, Engine, Horsepower, CityMPG, HW_MPG, Weight, WheelBase, Length, Width) %>%
+  scale()
+```
+
+Посмотрим на оптимальное количество кластеров.
+
+**Gap statistic**
+
+Gap statistic сравнивает внутрикластерную дисперсию данных с дисперсией, которую ожидается увидеть в случайно распределенных данных. Если данные имеют четкую кластерную структуру, внутрикластерная дисперсия будет значительно ниже, чем у случайных данных. Gap statistic количественно оценивает эту разницу.
+
+```{r}
+fviz_nbclust(data_clust, kmeans, method = "gap_stat", k.max = 15)
+```
+
+Алгоритм считает, что тут нельзя выделить даже два кластера:)
+
+**Scree plot**
+
+```{r}
+tot_withinss <- map_dbl(1:15,  function(k){
+  model <- kmeans(x = data_clust, centers = k, nstart = 25)
+  model$tot.withinss
+})
+
+elbow_df <- data.frame(
+  k = 1:15 ,
+  tot_withinss = tot_withinss
+)
+
+ggplot(elbow_df, aes(x = k, y = tot_withinss)) +
+  geom_line() +
+  scale_x_continuous(breaks = 1:15)
+```
+
+```{r}
+kmeans2 <- kmeans(data_clust, centers = 2, nstart = 25)
+str(kmeans2)
+
+kmeans3 <- kmeans(data_clust, centers = 3, nstart = 25)
+kmeans4 <- kmeans(data_clust, centers = 4, nstart = 25)  
+kmeans5 <- kmeans(data_clust, centers = 5, nstart = 25) 
+kmeans6 <- kmeans(data_clust, centers = 6, nstart = 25) 
+kmeans7 <- kmeans(data_clust, centers = 7, nstart = 25) 
+```
+
+- *totss* -- Общая сумма квадратов расстояний между каждой точкой данных и общим средним значением всех данных. Показывает общую изменчивость данных.
+
+- *withinss* --  Внутрикластерная сумма квадратов. Вектор длиной k. Каждый элемент представляет сумму квадратов расстояний между точками внутри данного кластера и его центроидом.
+
+- *tot.withinss* -- Общая внутрикластерная сумма квадратов. Сумма всех элементов в withinss. Представляет общую внутрикластерную изменчивость.
+
+- *betweenss* --  Межкластерная сумма квадратов. Сумма квадратов расстояний между каждым центроидом кластера и общим средним значением всех данных. Представляет изменчивость между кластерами. Большее значение betweenss свидетельствует о лучшем разделении кластеров. Заметим, что totss = betweenss + tot.withinss.
+
+
+```{r chunk_name_2, fig.width=20, fig.height=13}
+plot1 <- fviz_cluster(kmeans2, geom = "point", data = data_clust) + ggtitle("K-means k = 2")
+plot2 <- fviz_cluster(kmeans3, geom = "point", data = data_clust) + ggtitle("K-means k = 3")
+plot3 <- fviz_cluster(kmeans4, geom = "point", data = data_clust) + ggtitle("K-means k = 4")
+plot4 <- fviz_cluster(kmeans5, geom = "point", data = data_clust) + ggtitle("K-means k = 5")
+plot5 <- fviz_cluster(kmeans6, geom = "point", data = data_clust) + ggtitle("K-means k = 6")
+plot6 <- fviz_cluster(kmeans7, geom = "point", data = data_clust) + ggtitle("K-means k = 7")
+grid.arrange(plot1, plot2, plot3, plot4, plot5, plot6, nrow = 2)
+```
+
+
+```{r chunk_name_clust, fig.width=20, fig.height=13}
+clusters <- kmeans6$cluster
+data_clust_with_clusters <- as.data.frame(data_clust) %>%
+  mutate(cluster = as.factor(clusters))
+
+ggpairs(data_clust_with_clusters, aes(color = cluster, alpha = 0.7))
+```
+
+
+**Confusion Matrix for Body_type**
+
+```{r}
+plot(table(data_log$Body_type, kmeans6$cluster),
+     main="Confusion Matrix",
+     xlab="Body_type", ylab="Cluster")
+```
+**Confusion Matrix for Wheel_type**
+
+```{r}
+plot(table(data_log$Wheel_type, kmeans3$cluster),
+     main="Confusion Matrix",
+     xlab="Wheel_type", ylab="Cluster")
+```
+
+## k-means++
+
+```{r chunk_name_3, fig.width=20, fig.height=13}
+set.seed(2505)
+
+my2d <- cmds(data_clust, ndim=2)$embed
+
+plot_kmeans <- function(data, my2d, num_clusters) {
+  df <- data.frame(
+    Dim1 = my2d[, 1],
+    Dim2 = my2d[, 2],
+    Cluster = factor(data) 
+  )
+
+  ggplot(df, aes(x = Dim1, y = Dim2, color = Cluster)) +
+    geom_point(size = 2, alpha = 0.7) +
+    labs(title = paste("K-means++ (k=", num_clusters, ")", sep = ""),
+         x = "Dim 1",
+         y = "Dim 2") +
+    scale_color_viridis_d() +
+    theme_bw() +
+    theme(plot.title = element_text(hjust = 0.5),
+          legend.position = "right")
+}
+
+kmeanspp2 <- kmeanspp(data_clust, 2)
+kmeanspp3 <- kmeanspp(data_clust, 3)
+kmeanspp4 <- kmeanspp(data_clust, 4)
+kmeanspp5 <- kmeanspp(data_clust, 5)
+kmeanspp6 <- kmeanspp(data_clust, 6)
+kmeanspp7 <- kmeanspp(data_clust, 7)
+
+plot1 <- plot_kmeans(kmeanspp2, my2d, 2)
+plot2 <- plot_kmeans(kmeanspp3, my2d, 3)
+plot3 <- plot_kmeans(kmeanspp4, my2d, 4)
+plot4 <- plot_kmeans(kmeanspp5, my2d, 5)
+plot5 <- plot_kmeans(kmeanspp6, my2d, 6)
+plot6 <- plot_kmeans(kmeanspp7, my2d, 7)
+grid.arrange(plot1, plot2, plot3, plot4, plot5, plot6, nrow = 2)
+```
+
+```{r chunk_name_clust_pp, fig.width=20, fig.height=13}
+clusters <- kmeanspp6
+data_clust_with_clusters <- as.data.frame(data_clust) %>%
+  mutate(cluster = as.factor(clusters))
+
+ggpairs(data_clust_with_clusters, aes(color = cluster, alpha = 0.7))
+```
+
+**Confusion Matrix for Body_type**
+
+```{r}
+plot(table(data_log$Body_type, kmeanspp6),
+     main="Confusion Matrix",
+     xlab="Body_type", ylab="Cluster")
+```
+
+**Confusion Matrix for Wheel_type**
+
+```{r}
+plot(table(data_log$Wheel_type, kmeanspp3),
+     main="Confusion Matrix",
+     xlab="Wheel_type", ylab="Cluster")
+```
+
+## Иерархическая кластеризация
+
+**Single linkage**
+
+```{r chunk_name_4, fig.width=20, fig.height=13}
+res_hc_sing <- data_clust %>%                   
+  dist(method = "euclidean") %>% 
+  hclust(method = "single")     
+
+
+fviz_dend(res_hc_sing)
+```
+
+**Complete linkage**
+
+```{r chunk_name_5, fig.width=20, fig.height=13}
+res_hc_comp <- data_clust %>%                   
+  dist(method = "euclidean") %>% 
+  hclust(method = "complete")     
+
+
+fviz_dend(res_hc_comp, k = 3, 
+          cex = 0.5, 
+          k_colors = c("#00AFBB", "#E7B800", "#FC4E07"),
+          color_labels_by_k = TRUE, 
+          rect = TRUE)
+```
+
+**Average linkage**
+
+```{r chunk_name_6, fig.width=20, fig.height=13}
+res_hc_avg <- data_clust %>%                   
+  dist(method = "euclidean") %>% 
+  hclust(method = "average")     
+
+
+fviz_dend(res_hc_avg, k = 4, 
+          cex = 0.5, 
+          k_colors = c("#00AFBB", "#E7B800", "#FC4E07", "darkblue"),
+          color_labels_by_k = TRUE, 
+          rect = TRUE)
+```
+
+**Ward**
+
+```{r chunk_name_7, fig.width=20, fig.height=13}
+res_hc_ward <- data_clust %>%                   
+  dist(method = "euclidean") %>% 
+  hclust(method = "ward.D2")     
+
+
+fviz_dend(res_hc_ward, k = 7, 
+          cex = 0.5, 
+          k_colors = c("#2E9FDF", "#00AFBB", "#E7B800", "#FC4E07", "darkblue", "#f77d9f"),
+          color_labels_by_k = TRUE, 
+          rect = TRUE)
+```
+
+
+**Centroid**
+
+```{r chunk_name_8, fig.width=20, fig.height=13}
+res_hc_cent <- data_clust %>%                   
+  dist(method = "euclidean") %>% 
+  hclust(method = "centroid")     
+
+
+fviz_dend(res_hc_cent)
+```
+
+## Метод разделения смеси 
+
+```{r}
+model <- Mclust(data_clust)
+summary(model)
+
+plot(model, what = "BIC")
+```
+
+Рассмотрим модели VVE, EVE, EEE, EEI.
+
+```{r}
+model_VVE <- Mclust(data_clust, modelName = "VVE")
+model_EVE <- Mclust(data_clust, modelName = "EVE")
+model_EEE <- Mclust(data_clust, modelName = "EEE")
+model_EEI <- Mclust(data_clust, modelName = "EEI")
+```
+
+```{r chunk_name_9, fig.width=20, fig.height=13}
+clusters_VVE <- model_VVE$classification
+clusters_EVE <- model_EVE$classification
+clusters_EEE <- model_EEE$classification
+clusters_EEI <- model_EEI$classification
+
+
+pca <- prcomp(data_clust, scale. = TRUE)
+pca_data_VVE <- as.data.frame(pca$x[, 1:2]) %>%
+  mutate(cluster = as.factor(clusters_VVE))
+pca_data_EVE <- as.data.frame(pca$x[, 1:2]) %>%
+  mutate(cluster = as.factor(clusters_EVE))
+pca_data_EEE <- as.data.frame(pca$x[, 1:2]) %>%
+  mutate(cluster = as.factor(clusters_EEE))
+pca_data_EEI <- as.data.frame(pca$x[, 1:2]) %>%
+  mutate(cluster = as.factor(clusters_EEI))
+
+plot1 <- ggplot(pca_data_VVE, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Clusters VVE", x = "Dim1", y = "Dim2")
+
+plot2 <- ggplot(pca_data_EVE, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Clusters EVE", x = "Dim1", y = "Dim2")
+
+plot3 <- ggplot(pca_data_EEE, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Clusters EEE", x = "Dim1", y = "Dim2")
+
+plot4 <- ggplot(pca_data_EEI, aes(x = PC1, y = PC2, color = cluster)) +
+  geom_point(alpha = 0.7) +
+  theme_minimal() +
+  labs(title = "Clusters EEI", x = "Dim1", y = "Dim2")
+
+
+grid.arrange(plot1, plot2, plot3, plot4, nrow = 2)
+```
+
+
+**Pairs plot VVE**
+
+```{r chunk_name_10, fig.width=20, fig.height=13}
+data_clust_with_clusters <- as.data.frame(data_clust) %>%
+  mutate(cluster = as.factor(clusters_VVE))
+
+ggpairs(data_clust_with_clusters, aes(color = cluster, alpha = 0.7))
+```
+
+
+## Спектральная кластеризация 
+
+```{r}
+set.seed(225)
+
+spec_result_6 <- specClust(data_clust, centers = 6, method = "none") 
+spec_result_5 <- specClust(data_clust, centers = 5, method = "none") 
+spec_result_3 <- specClust(data_clust, centers = 3, method = "none") 
+
+pca_result <- prcomp(data_clust)
+pca_data <- pca_result$x[, 1:2]  
+
+pca_data <- as.data.frame(pca_data)
+pca_data$cluster <- spec_result_5$cluster
+
+ggplot(pca_data, aes(x = PC1, y = PC2, color = as.factor(cluster))) +
+  geom_point() +
+  labs(x = "PC1",
+       y = "PC2",
+       color = "cluster") +
+  theme_bw() +
+  scale_color_viridis_d() 
+
+```
+
+
+**Качество кластеризации**
+
+```{r}
+calculate_metrics <- function(data, clusters) {
+  dist_matrix <- dist(data)  
+
+  db_index <- index.DB(data, clusters)
+  dunn_index <- dunn(dist_matrix, clusters)
+  sil <- silhouette(clusters, dist_matrix)
+  
+  metrics <- data.frame(
+    Davies_Bouldin = db_index$DB,
+    Silhouette_Avg = mean(sil[, 3]),
+    Dunn = dunn_index
+  )
+  
+  return(metrics)
+}
+
+
+clusters_kmeans6 <- kmeans6$cluster
+metrics_kmeans6 <- calculate_metrics(data_clust, clusters_kmeans6)
+
+clusters_kmeans5 <- kmeans5$cluster
+metrics_kmeans5 <- calculate_metrics(data_clust, clusters_kmeans5)
+
+clusters_kmeans3 <- kmeans3$cluster
+metrics_kmeans3 <- calculate_metrics(data_clust, clusters_kmeans3)
+
+
+clusters_spectral_6 <- spec_result_6$cluster
+metrics_spectral_6 <- calculate_metrics(data_clust, clusters_spectral_6)
+
+clusters_spectral_5 <- spec_result_5$cluster
+metrics_spectral_5 <- calculate_metrics(data_clust, clusters_spectral_5)
+
+clusters_spectral_3 <- spec_result_3$cluster
+metrics_spectral_3 <- calculate_metrics(data_clust, clusters_spectral_3)
+
+
+clusters_VVE <- model_VVE$classification
+metrics_VVE <- calculate_metrics(data_clust, clusters_VVE)
+
+clusters_EVE <- model_EVE$classification
+metrics_EVE <- calculate_metrics(data_clust, clusters_EVE)
+
+clusters_kmeanspp6 <- kmeanspp6
+metrics_kmeanspp6 <- calculate_metrics(data_clust, clusters_kmeanspp6)
+
+clusters_kmeanspp5 <- kmeanspp5
+metrics_kmeanspp5 <- calculate_metrics(data_clust, clusters_kmeanspp5)
+
+clusters_kmeanspp3 <- kmeanspp3
+metrics_kmeanspp3 <- calculate_metrics(data_clust, clusters_kmeanspp3)
+
+
+results_summary <- data.frame(
+  Method = c("Spectral 6", "Spectral 5", "Spectral 3", "k-means 6", "k-means 5", "k-means 3",  "k-means++ 6", "k-means++ 5", "k-means++ 3", "VVE 5", "EVE 5"),
+  Davies_Bouldin = c(metrics_spectral_6$Davies_Bouldin, metrics_spectral_5$Davies_Bouldin, metrics_spectral_3$Davies_Bouldin, metrics_kmeans6$Davies_Bouldin, metrics_kmeans5$Davies_Bouldin, metrics_kmeans3$Davies_Bouldin, metrics_kmeanspp6$Davies_Bouldin, metrics_kmeanspp5$Davies_Bouldin, metrics_kmeanspp3$Davies_Bouldin,  metrics_VVE$Davies_Bouldin, metrics_EVE$Davies_Bouldin),
+  Silhouette_Avg = c(metrics_spectral_6$Silhouette_Avg,  metrics_spectral_5$Silhouette_Avg,  metrics_spectral_3$Silhouette_Avg, metrics_kmeans6$Silhouette_Avg,  metrics_kmeans5$Silhouette_Avg, metrics_kmeans3$Silhouette_Avg, metrics_kmeanspp6$Silhouette_Avg, metrics_kmeanspp5$Silhouette_Avg, metrics_kmeanspp3$Silhouette_Avg, metrics_VVE$Silhouette_Avg, metrics_EVE$Silhouette_Avg),
+  Dunn = c( metrics_spectral_6$Dunn,  metrics_spectral_5$Dunn,  metrics_spectral_3$Dunn, metrics_kmeans6$Dunn, metrics_kmeans5$Dunn, metrics_kmeans3$Dunn, metrics_kmeanspp6$Dunn, metrics_kmeanspp5$Dunn, metrics_kmeanspp3$Dunn, metrics_VVE$Dunn, metrics_EVE$Dunn)
+)
+
+datatable(results_summary)
+```
+
+
