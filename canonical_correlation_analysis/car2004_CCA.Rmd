@@ -1,0 +1,247 @@
+---
+output: html_document
+error: FALSE
+warning: FALSE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+
+library(purrr)
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(zoo)
+library(caret)
+library(car)
+library(stats)
+library(readr)
+library(DT)
+library(formattable)
+library(hrbrthemes)
+library(tidyverse)
+library(plotly)
+library(GGally)
+library(psych)
+library(qgraph)
+library(corrplot)
+library(MASS)
+library(gridExtra)
+library(factoextra)
+library(FactoMineR)
+library(gplots)
+library(CCA)
+library(yacca)
+
+
+print_df <- function(df) {
+  datatable(df, 
+            options = list(scrollX = TRUE,  # Горизонтальная прокрутка
+                           pageLength = 10, 
+                           autoWidth = TRUE),
+            class = 'display nowrap',       # Отключение переноса текста для удобной прокрутки
+            rownames = FALSE)               # Отключение номеров строк 
+}
+
+create_ggpairs <- function(data, density_diag = TRUE, fig_width = 15, fig_height = 7) {
+  if (density_diag) {
+    ggpairs(data, diag = list(continuous = "densityDiag", discrete = "barDiag", na = "naDiag", mapping = aes(fill = "red")), fig.width = fig_width, fig.height = fig_height)
+  } else {
+    ggpairs(data, diag = list(continuous = "barDiag", mapping = aes(fill = "red")), fig.width = fig_width, fig.height = fig_height)
+  }
+}
+
+```
+
+# Анализ каноничесих корреляций данных car2004
+
+## Загрузка данных
+
+```{r}
+data_car <- read_excel("C:/Users/redmi/OneDrive/Документы/R analysis/car2004.xls", na = "*")
+colnames(data_car) <- gsub("-", "_", colnames(data_car))
+
+# Добавление доп.столбцов
+data_car$Other <- ifelse(rowSums(data_car[c("Sport", "SportUtil", "Wagon", "Minivan", "Pickup")]) == 0, 1, 0)
+data_car$Front_wheel <- ifelse(rowSums(data_car[c("All_wheel", "Rear_wheel")]) == 0, 1, 0)
+
+# Создание категориальных переменных
+data_car <- data_car %>%
+mutate(
+  Body_type = factor(case_when(
+    Sport == 1 ~ 1,
+    SportUtil == 1 ~ 2,
+    Wagon == 1 ~ 3,
+    Minivan == 1 ~ 4,
+    Pickup == 1 ~ 5,
+    Other == 1 ~ 6,
+    TRUE ~ NA_integer_
+  ), levels = c(1, 2, 3, 4, 5, 6), labels = c("Sport", "SportUtil", "Wagon", "Minivan", "Pickup", "Other"))
+)
+
+data_car <- data_car %>%
+  mutate(
+    Wheel_type = factor(case_when(
+      All_wheel == 1 ~ 1,
+      Rear_wheel == 1 ~ 2,
+      Front_wheel == 1 ~ 3,
+      TRUE ~ NA_integer_  
+    ), levels = c(1, 2, 3), labels = c("All_wheel", "Rear_wheel", "Front_wheel"))
+  )
+
+head(data_car, 5) |>
+ print_df()
+```
+
+
+Так как пропусков не так много, то заполним их медианным значением по каждому признаку.
+
+```{r}
+cols_to_fill <- c("CityMPG", "HW_MPG", "Weight", "WheelBase", "Length", "Width")
+filled_cols <- na.aggregate(data_car[, cols_to_fill], FUN = median, na.rm = TRUE)
+data_car[, cols_to_fill] <- filled_cols
+```
+
+Наблюдения Retail, Dealer, Engine, Horsepower, CityMPG, HW_MPG, Weight, WheelBase имеют хвост вправо, прологарифмируем их и построим графики зависимостей признаков. 
+
+```{r chunk_name_1, fig.width=20, fig.height=13}
+data_log <- data_car %>% 
+  mutate_at(vars(Retail, Dealer, Engine, Horsepower, CityMPG, HW_MPG, Weight, WheelBase), ~log(.))
+
+#Убираем сильно выделяющиеся наблюдения
+data_log <- data_log[-c(69, 94, 70, 300, 97, 273, 272, 259, 305, 288, 241, 242, 419), ]
+
+data_select <- data_log %>% 
+  dplyr::select(-Name, -Sport, -SportUtil,-Wagon, -Minivan, -Pickup, -All_wheel, -Rear_wheel, -Cylinders, -Other, -Front_wheel, -Body_type, -Wheel_type)
+
+create_ggpairs(data_select, density_diag = FALSE) 
+```
+
+## Результаты CCA
+
+Разделим данные на две группы.
+
+1 группа. Размеры машины: объединяет признаки WheelBase, Weight, Length, Width;
+
+2 группа. Характеристики мотора (мощность и экономичность): Engine, Horsepower, HW_MPG, CityMPG.
+ 
+```{r}
+#group1 <- data_log[, c("Weight", "WheelBase", "Length", "Width")]
+#group2 <- data_log[, c("CityMPG", "HW_MPG", "Engine", "Horsepower")]
+
+#cca_result <- cancor(group1, group2)
+
+#print(cca_result)
+
+group1 <- data_log  %>% 
+          dplyr::select ("Weight", "WheelBase", "Length", "Width") %>%
+          scale()
+
+group2 <- data_log %>% 
+          dplyr::select ("CityMPG", "HW_MPG", "Engine", "Horsepower") %>%
+          scale()
+```
+
+```{r}
+cca_res <- cca(group1, group2)
+
+summary(cca_res)
+```
+
+
+При уровне значимости $\alpha=0,05$ значимыми являются первые три канонические корреляции. 
+
+
+#### Scatter plot для пар канонических переменных
+
+```{r chunk_name_2, fig.width=20, fig.height=13}
+X_scores <- as.matrix(group1) %*% cca_res$xcoef
+Y_scores <- as.matrix(group2) %*% cca_res$ycoef
+
+cca_scores <- data.frame(X1 = X_scores[, 1],
+                         Y1 = Y_scores[, 1],
+                         X2 = X_scores[, 2],
+                         Y2 = Y_scores[, 2],
+                         X3 = X_scores[, 3],
+                         Y3 = Y_scores[, 3],
+                         X4 = X_scores[, 4],
+                         Y4 = Y_scores[, 4])
+
+p1 <- ggplot(cca_scores, aes(x = X1, y = Y1)) +
+  geom_point(color = "darkblue") +
+  labs(title = "Первая каноническая корреляция",
+       x = "CC1_X",
+       y = "CC1_Y") +
+  theme_minimal()
+
+p2 <- ggplot(cca_scores, aes(x = X2, y = Y2)) +
+  geom_point(color = "#00AFBB") +
+  labs(title = "Вторая каноническая корреляция",
+       x = "CC2_X",
+       y = "CC2_Y") +
+  theme_minimal()
+
+p3 <- ggplot(cca_scores, aes(x = X3, y = Y3)) +
+  geom_point(color = "#E7B800") +
+  labs(title = "Третья каноническая корреляция",
+       x = "CC3_X",
+       y = "CC3_Y") +
+  theme_minimal()
+
+p4 <- ggplot(cca_scores, aes(x = X4, y = Y4)) +
+  geom_point(color = "#FC4E07") +
+  labs(title = "Четвертая каноническая корреляция",
+       x = "CC4_X",
+       y = "CC4_Y") +
+  theme_minimal()
+
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+```
+
+1.  Сильная положительная корреляция между первой канонической переменной для группы размеров автомобилей и характеристиками двигателя. Это указывает на то, что более крупные автомобили часто имеют мощные двигатели с меньшей экономичностью. 
+
+2. Корреляция значительно слабее, но еще присутствует. Это может отражать зависимости между второстепенными признаками.
+
+3. Данный график уже показывает слабую корреляцию.
+
+4. Данный график не имеет смысла рассматривать, так как 4 каноническая корреляция не значима.
+
+#### Box plot между типом привода и первой канонической переменной
+
+```{r chunk_name_3, fig.width=20, fig.height=13}
+cca_df <- data_log %>% 
+  mutate(CC1_X=cca_scores$X1,
+         CC1_Y=cca_scores$Y1,
+         CC2_X=cca_scores$X2,
+         CC2_Y=cca_scores$Y2,
+         CC3_X=cca_scores$X3,
+         CC3_Y=cca_scores$Y3,
+         CC4_X=cca_scores$X4,
+         CC4_Y=cca_scores$Y4)
+
+p1 <- ggplot(cca_df, aes(x = Wheel_type, y = CC1_X, color = Wheel_type)) +
+  geom_boxplot(width=0.5) +
+  geom_jitter(width=0.15) +
+  theme(legen.position="none")
+
+
+p2 <- ggplot(cca_df, aes(x = Wheel_type, y = CC1_Y, color = Wheel_type))+
+  geom_boxplot(width=0.5) +
+  geom_jitter(width=0.15) +
+  theme(legen.position="none")
+
+grid.arrange(p1, p2, nrow = 1)
+```
+
+
+Графики показывают распределение первой канонической переменной в зависимости от типов привода (Front_wheel, Rear_wheel, All_wheel). 
+
+
+#### Scatter plot данных, раскрашеный по типам привода, в плоскости первых канонических переменных  
+
+```{r}
+cca_df %>% 
+  ggplot(aes(x=CC1_X,y=CC1_Y, color=Wheel_type))+
+  geom_point()
+```
+
