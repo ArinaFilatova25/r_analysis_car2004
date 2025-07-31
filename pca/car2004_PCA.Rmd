@@ -1,0 +1,302 @@
+---
+output: html_document
+error: FALSE
+warning: FALSE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+
+library(readxl)
+library(ggplot2)
+library(dplyr)
+library(zoo)
+library(caret)
+library(car)
+library(stats)
+library(readr)
+library(DT)
+library(formattable)
+library(hrbrthemes)
+library(tidyverse)
+library(plotly)
+library(GGally)
+library(factoextra)
+
+print_df <- function(df) {
+  datatable(df, 
+            options = list(scrollX = TRUE,  # Горизонтальная прокрутка
+                           pageLength = 10, 
+                           autoWidth = TRUE),
+            class = 'display nowrap',       # Отключение переноса текста для удобной прокрутки
+            rownames = FALSE)               # Отключение номеров строк 
+}
+
+create_ggpairs <- function(data, density_diag = TRUE, fig_width = 15, fig_height = 7) {
+  if (density_diag) {
+    ggpairs(data, diag = list(continuous = "densityDiag", discrete = "barDiag", na = "naDiag", mapping = aes(fill = "red")), fig.width = fig_width, fig.height = fig_height)
+  } else {
+    ggpairs(data, diag = list(continuous = "barDiag", mapping = aes(fill = "red")), fig.width = fig_width, fig.height = fig_height)
+  }
+}
+
+```
+
+## Анализ главных компонент данных car2004
+
+#### Загрузка данных
+
+```{r}
+data_car <- read_excel("C:/Users/redmi/OneDrive/Документы/R analysis/car2004.xls", na = "*")
+colnames(data_car) <- gsub("-", "_", colnames(data_car))
+
+# Добавление доп.столбцов
+data_car$Other <- ifelse(rowSums(data_car[c("Sport", "SportUtil", "Wagon", "Minivan", "Pickup")]) == 0, 1, 0)
+data_car$Front_wheel <- ifelse(rowSums(data_car[c("All_wheel", "Rear_wheel")]) == 0, 1, 0)
+
+# Создание категориальных переменных
+data_car <- data_car %>%
+mutate(
+  Body_type = factor(case_when(
+    Sport == 1 ~ 1,
+    SportUtil == 1 ~ 2,
+    Wagon == 1 ~ 3,
+    Minivan == 1 ~ 4,
+    Pickup == 1 ~ 5,
+    Other == 1 ~ 6,
+    TRUE ~ NA_integer_
+  ), levels = c(1, 2, 3, 4, 5, 6), labels = c("Sport", "SportUtil", "Wagon", "Minivan", "Pickup", "Other"))
+)
+
+data_car <- data_car %>%
+  mutate(
+    Wheel_type = factor(case_when(
+      All_wheel == 1 ~ 1,
+      Rear_wheel == 1 ~ 2,
+      Front_wheel == 1 ~ 3,
+      TRUE ~ NA_integer_  
+    ), levels = c(1, 2, 3), labels = c("All_wheel", "Rear_wheel", "Front_wheel"))
+  )
+
+head(data_car, 5) |>
+ print_df()
+```
+
+1. ***Name*** - Название автомобиля - **качественный признак**
+2. ***Sport*** - Спортивная машина (1=да, 0=нет) - **качественный признак**
+Легкие,  обычно имеют мощные двигатели, способные развивать высокие скорости, чаще всего имеют задний или полный привод.
+3. ***SportUtil*** - Внедорожник (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется высокой посадкой, вместительным салоном, большим клиренсом и возможностью полного привода. 
+4. ***Wagon*** - Универсал (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется увеличенным багажным отсеком, обычно имеет передний или полный привод.
+5. ***Minivan*** - Минивэн  (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется большим количеством места для пассажиров и багажа, наиболее характерен передний привод. Некоторые модели минивэнов предлагают неплохую экономию топлива, учитывая их размер и вместительность.
+6. ***Pickup*** - Пикап  (тип кузова) (1=да, 0=нет) - **качественный признак**
+Характеризуется мощными двигателями и возможностью заднего или полного приводов.  
+7. ***All-wheel*** - Полный привод (1=да, 0=нет) - **качественный признак**
+8. ***Rear-wheel*** - Задний привод (1=да, 0=нет) - **качественный признак**
+9. ***Retail*** - Рекомендованная розничная цена в долларах (цена продажи диллером) - **количественный непрерывный**
+10. ***Dealer*** - Закупочная цена для дилера в долларах - **количественный непрерывный**
+11. ***Engine*** - Объем двигателя в литрах - **количественный дискретный**
+12. ***Cylinders*** - Число цилиндров (=-1 для роторного двигателя) - **количественный дискретный**
+13. ***Horsepower*** - Лошадиные силы - **количественный дискретный**
+14. ***CityMPG*** - Ожидаемый пробег в милях на галлон топлива для автомобиля в условиях городского движения. - **количественный дискретный**
+15. ***HW_MPG*** - Ожидаемый пробег в милях на галлон топлива для автомобиля в условиях движения по шоссе или трассе при постоянной скорости - **количественный дискретный**
+
+В городском цикле обычно встречаются частые остановки, старты и пробки, что приводит к более частому использованию тормозов и ускорителей. Это может уменьшить экономию топлива.
+
+В условиях шоссейного движения меньше остановок и меньше стартов, что может способствовать более высокой экономии топлива.
+
+То есть ожидается, что HW_MPG > CityMPG.
+
+16. ***Weight*** - Вес автомобиля в фунтах - **количественный непрерывный**
+17. ***WheelBase*** -  Расстояние между передними и задними колесами в дюймах - **количественный дискретный**
+18. ***Length*** - Длина автомобиля в дюймах - **количественный дискретный**
+19. ***Width*** - Ширина автомобиля в дюймах - **количественный дискретный**
+
+
+Были добавлены еще два столбца, которые соответствуют другому (то есть ни одному из представленных) типу кузова (***Other***) и переднему приводу (***Front_wheel***). 
+
+Также были добавлены две категориальные переменные, отвечающие типу кузова (***Body_type***) и типу привода (***Wheel_type***).
+
+
+#### Симметричность и выбросы
+
+```{r chunk_name_1, fig.width=20, fig.height=13}
+data_select <- data_car %>% dplyr::select(-Name, -Sport, -SportUtil,-Wagon, -Minivan, -Pickup, -All_wheel, -Rear_wheel, -Front_wheel, -Other, -Cylinders, -Body_type, -Wheel_type)
+
+create_ggpairs(data_select, density_diag = FALSE) 
+```
+
+Наблюдения Retail, Dealer, Engine, Horsepower, CityMPG, HW_MPG, Weight, WheelBase имеют хвост вправо, прологарифмируем их и построим графики зависимостей признаков. 
+
+```{r chunk_name_2, fig.width=20, fig.height=13}
+data_log <- data_car %>% 
+  mutate_at(vars(Retail, Dealer, Engine, Horsepower, CityMPG, HW_MPG, Weight, WheelBase), ~log(.))
+
+data_select <- data_log %>% dplyr::select(-Name, -Sport, -SportUtil,-Wagon, -Minivan, -Pickup, -All_wheel, -Rear_wheel, -Cylinders, -Other, -Front_wheel, -Body_type, -Wheel_type)
+
+create_ggpairs(data_select, density_diag = FALSE) 
+```
+
+
+Так как пропусков не так много, то заполним их медианным значением по каждому признаку.
+
+```{r}
+cols_to_fill <- c("CityMPG", "HW_MPG", "Weight", "WheelBase", "Length", "Width")
+filled_cols <- na.aggregate(data_log[, cols_to_fill], FUN = median, na.rm = TRUE)
+data_log[, cols_to_fill] <- filled_cols
+```
+
+## Результат PCA()
+
+```{r}
+library("FactoMineR")
+
+data_pca <- data_log %>% dplyr::select(Retail, HW_MPG, WheelBase, Width, Length, Weight, Horsepower, Engine, CityMPG,   Cylinders, Body_type, Wheel_type)
+
+res_car_pca <- PCA(data_pca, ncp = 9, quali.sup = c(10:12), graph = FALSE)
+```
+ 
+### Собственные числа 
+
+```{r}
+datatable(res_car_pca$eig)
+```
+
+### Собственные вектора (U)
+
+$$U_i=\frac{F_i}{\sqrt{\lambda_i}}, \ \text{где} \  F_i -\text{вектор i-x факторных нагрузок.}$$
+
+```{r}
+car_eigenvalues <- res_car_pca$eig[, 1]
+car_factor_loadings <- res_car_pca$var$coord
+car_eigenvectors <- sweep(car_factor_loadings, 2, sqrt(car_eigenvalues), FUN = "/")
+
+print_df(car_eigenvectors)
+```
+
+### Координаты признаков (Матрица факторных нагрузок F)
+
+```{r}
+print_df(res_car_pca$var$coord)
+```
+
+
+### Координаты индивидов (Матрица главных компонент Z)
+
+$$Z_i=XU_i=\sqrt{\lambda_i}V_i.$$
+
+```{r}
+print_df(res_car_pca$ind$coord)
+```
+
+## Визуализация
+
+#### Scree plot
+
+```{r}
+fviz_eig(res_car_pca, addlabels = TRUE, ylim = c(0, 80), barfill = '#ffa8af', barcolor = '#ffa8af')
+```
+
+Имеет смысл рассматривать первые две компоненты, так как они объясняют ~82% дисперсии.
+
+#### Factor map
+
+```{r}
+fviz_pca_var(res_car_pca, col.var = "cos2",
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"), 
+             repel = TRUE 
+             )
+```
+
+Данный график показывает признаки и их корреляция с главными компонентами и корреляции признаков между собой.
+
+Чем длинее стрелка, тем лучше признак представлен в пространстве первых двух главных компонент. В данном случае лучше всего представлены Weight, Horsepower, CityMPG, Length, Engine. 
+
+**Интерпретация первых двух главных компонент**:
+
+1. Соответствует общему размеру (габаритам и массе)  машины: чем машина больше, тем правее она будет расположена на плоскости первых двух главных компонент.
+
+2. Дороговизна машины при фиксированном общем размере: чем дешевле машина при фиксированной первой координате, тем выше она будет расположена на плоскости первых двух главных компонент.
+
+
+#### Biplot
+
+**Группировка по Cylinders**
+
+```{r}
+fviz_pca_biplot(res_car_pca, 
+                geom.ind = "point",
+                pointsize = 3,
+                col.var = 'darkblue',
+                habillage = 10)
+```
+
+Логично, что чем больше у машины двигателей, тем она больше. 
+
+**Группировка по Body_type**
+
+```{r}
+fviz_pca_biplot(res_car_pca, 
+                geom.ind = "point",
+                pointsize = 3.5,
+                col.var = 'darkblue',
+                habillage = 11)+
+  ggpubr::color_palette("RdBu") 
+```
+
+Спортивные машины более дорогие при фиксированной первой координате (общем размере машины), поэтому большинство их располагается внизу графика. Машины типы Other -- можно сказать машины среднего ценового сегмента, расположение их в пространстве первых двух главных компонент подтверждает это. Минивэны являются более доступными машинами среди машин аналогичных размеров. 
+
+**Группировка по Wheel_type**
+
+```{r}
+fviz_pca_biplot(res_car_pca, 
+                geom.ind = "point",
+                pointsize = 3,
+                col.var = 'darkblue',
+                habillage = 12)+
+  ggpubr::color_palette("Set2") 
+```
+
+При фиксированном общем размере машины, в основном заднеприводные автомобили более дорогие, а переднеприводные -- более дешевые. 
+
+**Выделяющиеся наблюдения**
+
+```{r}
+fviz_pca_ind(res_car_pca, col.ind  = 'darkblue')
+```
+
+
+```{r}
+selected_rows <- data_car[c(69, 94, 70, 300, 297, 305, 304, 288, 278, 275, 276), ]
+print_df(selected_rows)
+```
+
+
+
+- 69, 94, 70
+
+Honda Civic Hybrid 4dr manual (gas/electric), Toyota Prius 4dr (gas/electric), Honda Insight 2dr (gas/electric) -- гибридные автомобили, имеют примерно одинакаовые габариты. Все три автомобиля относятся к классу компактных автомобилей, который обычно считается более доступным, чем среднеразмерные или полноразмерные автомобили. 
+
+- 300
+
+Ford Excursion 6.8 XLT -- один из самых больших внедорожников, которые когда-либо выпускались. Более доступный по сравнению с современными моделями аналогичных габаритов. 
+
+- 297, 305, 304
+
+Chevrolet Suburban 1500 LT, Hummer H2, GMC Yukon XL 2500 SLT -- внедорожники, не такие дорогие, как некоторые другие автомобили премиум-класса аналогичных размеров. 
+
+- 288
+
+Porsche 911 GT2 2dr -- спортивный автомобиль, среднеразмерный. Самый дорогой автомобиль в выборке. 
+
+- 278 
+
+Mercedes-Benz SLK32 AMG 2dr -- спортивный автомобиль, среднеразмерный. Среди автомобилей аналогичных размеров, является более дорогим. 
+
+- 275, 276
+
+Mercedes-Benz SL55 AMG 2dr, Mercedes-Benz SL600 convertible 2dr --  спортивные автомобили, имеют практически идентичные габариты, среднеразмерные. Среди машин аналогичных габаритов являются более дорогими.  
+
+
